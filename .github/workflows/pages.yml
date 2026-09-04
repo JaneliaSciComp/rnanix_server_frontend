@@ -1,8 +1,9 @@
 name: Deploy to GitHub Pages
 
-# One-time setup required before this workflow can deploy anything:
+# No manual setup needed: configure-pages' enablement:true below has this workflow turn on
+# Pages (source = GitHub Actions) itself on first run, via the GITHUB_TOKEN's pages:write
+# permission. If your org's policies block that self-enable, do it once manually instead:
 #   repo Settings -> Pages -> Build and deployment -> Source -> "GitHub Actions"
-# Nothing else to configure — no secrets needed, this uses the built-in GITHUB_TOKEN.
 
 on:
   push:
@@ -30,6 +31,8 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Upload repo root as the Pages artifact
         uses: actions/upload-pages-artifact@v3
