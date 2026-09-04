@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RNAnix Copilot — v2 mockup</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <div class="brand">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M7 3c0 4 10 6 10 12M17 3c0 4-10 6-10 12" stroke="#2fd6a7" stroke-width="1.8" stroke-linecap="round"/><circle cx="7" cy="3" r="1.6" fill="#2fd6a7"/><circle cx="17" cy="21" r="1.6" fill="#2fd6a7"/><circle cx="17" cy="3" r="1.6" fill="#e8edf2"/><circle cx="7" cy="21" r="1.6" fill="#e8edf2"/></svg>
+        <span class="brand-word">RNA<b>nix</b></span>
+      </div>
+      <button class="sidebar-toggle" id="sidebarToggle" title="Collapse sidebar">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5"/><path d="M18 17l-5-5 5-5"/></svg>
+      </button>
+    </div>
+    <button class="new-chat" id="newChatBtn"><span class="nc-plus">+</span><span class="nc-label">New chat</span></button>
+    <div class="search-box">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#8a97a6" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input placeholder="Search chats…">
+    </div>
+    <div class="hist-label">History</div>
+    <div class="hist-list" id="histList"><!-- filled by app.js --></div>
+    <div class="sidebar-foot">
+      <div class="avatar">JD</div>
+      <div class="who">
+        <div class="wn">J. Doe</div>
+        <div class="we">j.doe@janelia.hhmi.org</div>
+      </div>
+      <a class="logout" href="login.html">Log out</a>
+    </div>
+  </aside>
+
+  <!-- ============ CHAT COLUMN ============ -->
+  <section class="chatcol">
+    <div class="chat-head">
+      <div class="cht" id="chatTitle">1EHZ tRNA · color by chain</div>
+      <span class="badge">Protenix v1.1</span>
+      <button class="adv-toggle" title="Manual form for power users — seeds, samples, MSA mode, Expert mode">Advanced form ⌄</button>
+    </div>
+    <div class="chat-body" id="chatBody"><!-- filled by app.js --></div>
+    <div class="chat-inputbar">
+      <div class="input-toolbar">
+        <button class="input-tool-btn" id="entityBtn" title="Build a multi-entity structure (RNA / protein / DNA / ligand)">Include sequence</button>
+        <div class="attach-wrap">
+          <button class="input-tool-btn" id="attachBtn" title="Add chemical mapping, MoHCA-seq, templates, or an MSA as conditioning">Add conditioners</button>
+          <div class="attach-menu" id="attachMenu" hidden>
+            <button data-tab="data" data-attach="chem">Chemical mapping (1D)</button>
+            <button data-tab="data" data-attach="mohca">MoHCA-seq (2D)</button>
+            <button data-tab="templates" data-attach="templates">Templates</button>
+            <button data-tab="msa" data-attach="msa">MSA</button>
+          </div>
+        </div>
+      </div>
+      <div class="inputbox">
+        <textarea id="msgInput" rows="1" placeholder="Message RNAnix — try “fetch 1EHZ”, “remove water”, “color by chain”, or “predict a structure for this sequence”…"></textarea>
+        <button class="send-btn" id="sendBtn" title="Send">Send</button>
+      </div>
+      <div class="input-hint">These commands run for real, client-side, against live RCSB data — no RNAnix backend needed. Predictions are staged UI only (need the real Protenix pipeline).</div>
+    </div>
+  </section>
+
+  <!-- ============ VIEWER COLUMN ============ -->
+  <div class="resize-handle" id="resizeHandle" title="Drag to resize"></div>
+  <aside class="viewer">
+    <div class="viewer-head">
+      <div class="viewer-name" id="viewerName">1EHZ — tRNA-Phe</div>
+      <div class="dl-wrap">
+        <button class="dl-main" id="dlMain" title="Download everything as a .zip">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
+          Export
+        </button>
+        <button class="dl-caret" id="dlCaret" title="More download options">⌄</button>
+        <div class="dl-menu" id="dlMenu" hidden>
+          <button class="dl-item" data-k="zip">Everything (.zip)</button>
+          <button class="dl-item" data-k="pdb">Structure (.pdb)</button>
+          <button class="dl-item" data-k="cif">Structure (.cif)</button>
+          <button class="dl-item" data-k="png">Image (.png)</button>
+          <button class="dl-item" data-k="dbn">Secondary structure (.dbn)</button>
+          <button class="dl-item" data-k="msa">Current MSA tab (.fasta)</button>
+          <button class="dl-item" data-k="pool">Full prediction pool (all seeds &amp; samples)</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="viewer-toolbar" id="viewerToolbar">
+      <!-- row 1: style + color as button groups -->
+      <div class="vt-row1">
+        <div class="btn-group" id="styleGroup">
+          <button class="seg-btn active" data-style="Cartoon">Cartoon</button>
+          <button class="seg-btn" data-style="Surface">Surface</button>
+          <button class="seg-btn" data-style="Ball & stick">Ball &amp; stick</button>
+        </div>
+        <div class="btn-group" id="colorGroup">
+          <button class="seg-btn active" data-color="Chain">Chain</button>
+          <button class="seg-btn" data-color="Rainbow">Rainbow</button>
+          <button class="seg-btn" data-color="pLDDT">pLDDT</button>
+          <button class="seg-btn" data-color="Element">Element</button>
+        </div>
+        <button class="icon-btn" id="measureBtn" title="Measure distance">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="7" width="19" height="10" rx="1.5"/><path d="M7 7v3M11 7v3M15 7v3M19 7v5"/></svg>
+        </button>
+      </div>
+      <!-- row 2: collapsible sequence accordion -->
+      <button class="seq-acc-head" id="seqAccHead">
+        <svg class="seq-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+        Sequence
+      </button>
+      <div class="seq-acc-body" id="seqPanel" hidden>
+        <div class="sp-body" id="seqBody"></div>
+      </div>
+    </div>
+
+    <div class="vtabs">
+      <button class="vtab active" data-tab="3d">3D</button>
+      <button class="vtab" data-tab="ss">SS</button>
+      <button class="vtab" data-tab="info">Info</button>
+      <button class="vtab" data-tab="msa">MSA</button>
+      <button class="vtab" data-tab="templates">Templates</button>
+      <button class="vtab" data-tab="data">Data</button>
+    </div>
+
+    <!-- ---- 3D tab ---- -->
+    <div class="tabpanel active" data-panel="3d">
+      <div class="canvas-wrap">
+        <div id="mstarContainer" class="mstar-container"></div>
+        <div class="viewer-msg" id="viewerMsg">Loading…</div>
+        <button class="icon-btn canvas-theme-btn" id="themeBtn" title="Toggle light/dark viewer background"></button>
+
+        <div class="display-wrap canvas-display-wrap">
+          <button class="icon-btn" id="displayBtn" title="Layers &amp; components">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </button>
+          <div class="display-menu" id="displayMenu">
+            <div class="disp-sec-label">Layers</div>
+            <div class="disp-layers" id="dispLayers"></div>
+            <div class="disp-divider"></div>
+            <div class="disp-sec-label">Components</div>
+            <div class="comp-panel">
+              <div class="comp-row" data-c="Polymer"><span class="cn">Polymer</span><button class="eye"></button></div>
+              <div class="comp-row" data-c="Ligand"><span class="cn">Ligand</span><button class="eye"></button></div>
+              <div class="comp-row" data-c="Water"><span class="cn">Water</span><button class="eye"></button></div>
+              <div class="comp-row" data-c="Ion"><span class="cn">Ion</span><button class="eye"></button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---- Secondary Structure tab ---- -->
+    <div class="tabpanel" data-panel="ss">
+      <div class="ssmode-row">
+        <button class="ssmode-btn active" data-m="proj">3D projection</button>
+        <button class="ssmode-btn" data-m="circular">2D layout</button>
+        <button class="ssmode-btn" data-m="arc">Arc</button>
+        <button class="ssmode-btn" data-m="flatten">Flattened 3D fold</button>
+      </div>
+      <div class="ss-caption">Backbone <span class="ss-leg-grey">grey</span> · <span class="ss-leg-pair">base pair</span> · <span class="ss-leg-pk">pseudoknot (dashed)</span>. "Flattened 3D fold" tracks the 3D viewer's camera live as you rotate it.</div>
+      <div class="ss-canvas" id="ssCanvas"></div>
+      <div class="motif-lanes-wrap">
+        <div class="data-sec-h" style="padding:0 14px;">Motif lanes <span class="data-hint">sequence · DMS · 2A3 reactivity (white=protected → red=reactive) · pairing (white=paired, light red=unpaired)</span></div>
+        <div id="motifLanes"></div>
+      </div>
+    </div>
+
+    <!-- ---- Info tab ---- -->
+    <div class="tabpanel" data-panel="info">
+      <div class="info-wrap" id="infoWrap"></div>
+    </div>
+
+    <!-- ---- MSA tab ---- -->
+    <div class="tabpanel" data-panel="msa">
+      <div class="data-wrap" style="padding-bottom:0;">
+        <div>
+          <div class="data-sec-h">Multiple sequence alignment <span class="data-hint">paste FASTA, gaps as '-'</span></div>
+          <textarea class="data-input" id="msaInput" rows="6"></textarea>
+          <div class="data-actions"><button class="mini-btn" id="msaUpload">Upload .fasta</button><button class="mini-btn primary" id="msaViz">Render alignment</button></div>
+        </div>
+      </div>
+      <div class="msa-table" id="msaWrap"></div>
+    </div>
+
+    <!-- ---- Templates tab ---- -->
+    <div class="tabpanel" data-panel="templates">
+      <div class="tpl-wrap" id="tplWrap"></div>
+    </div>
+
+    <!-- ---- Data tab: ChemMap + MoHCA-seq ---- -->
+    <div class="tabpanel" data-panel="data">
+      <div class="data-wrap">
+        <div class="data-sec">
+          <div class="data-sec-h">Chemical mapping (1D) <span class="data-hint">SHAPE / DMS reactivity per residue</span></div>
+          <textarea class="data-input" id="chemInput" rows="2" placeholder="Paste reactivity values, comma or newline separated…"></textarea>
+          <div class="data-actions"><button class="mini-btn" id="chemUpload">Upload file</button><button class="mini-btn primary" id="chemViz">Visualize</button></div>
+          <div class="chemmap-track" id="chemTrack"></div>
+        </div>
+        <div class="data-sec">
+          <div class="data-sec-h">MoHCA-seq (2D) <span class="data-hint">hydroxyl-radical contact map</span></div>
+          <textarea class="data-input" id="mohcaInput" rows="3" placeholder="Paste contact triples: i,j,score per line…"></textarea>
+          <div class="data-actions"><button class="mini-btn" id="mohcaUpload">Upload file</button><button class="mini-btn primary" id="mohcaViz">Visualize</button></div>
+          <div class="mohca-grid" id="mohcaGrid"></div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+</div>
+
+<!-- ============ ENTITY INPUT MODAL — ported from the original /inference form ============ -->
+<div class="modal-overlay" id="entityModalOverlay" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>Input entities</h3>
+      <button class="modal-close" id="entityModalClose" title="close">&times;</button>
+    </div>
+    <label class="ilbl">Entities <span class="lbl-sub">RNA · protein · DNA · ligand</span></label>
+    <div id="ent-entities"></div>
+    <div class="ent-actions"><button id="add-entity" class="linkbtn" type="button">+ Add entity</button></div>
+    <div class="seqinfo"><span id="ent-seqlen">0 residues</span><button id="example-btn" class="linkbtn" type="button">load example</button></div>
+    <div class="modal-actions">
+      <button class="mini-btn" id="entityCancel">Cancel</button>
+      <button class="mini-btn primary" id="entityInsert">Insert into message</button>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="fileHidden" hidden accept=".txt,.csv,.fasta,.fa">
+<script src="app.js"></script>
+</body>
+</html>

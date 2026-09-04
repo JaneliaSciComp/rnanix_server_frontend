@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RNAnix — sign in</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="mockup-badge">mockup — v2 concept</div>
+
+<div class="auth-wrap">
+  <div class="auth-card">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M7 3c0 4 10 6 10 12M17 3c0 4-10 6-10 12" stroke="#2fd6a7" stroke-width="1.8" stroke-linecap="round"/><circle cx="7" cy="3" r="1.6" fill="#2fd6a7"/><circle cx="17" cy="21" r="1.6" fill="#2fd6a7"/><circle cx="17" cy="3" r="1.6" fill="#e8edf2"/><circle cx="7" cy="21" r="1.6" fill="#e8edf2"/></svg>
+      <span class="brand-word">RNA<b>nix</b></span>
+    </div>
+
+    <div class="auth-tabs">
+      <button class="active" data-pane="login">Log in</button>
+      <button data-pane="invite">Accept invite</button>
+    </div>
+
+    <!-- ---- LOG IN ---- -->
+    <div class="pane active" id="pane-login">
+      <p class="auth-title">Welcome back</p>
+      <p class="auth-sub">Sign in with the account your lab admin set up for you.</p>
+      <form onsubmit="event.preventDefault(); location.href='index.html';">
+        <div class="field"><label>Email</label><input type="email" placeholder="you@lab.edu" value="j.doe@janelia.hhmi.org"></div>
+        <div class="field"><label>Password</label><input type="password" placeholder="••••••••" value="••••••••••"></div>
+        <div class="auth-forgot"><a href="#">Forgot password?</a></div>
+        <button class="btn-primary" type="submit">Log in →</button>
+      </form>
+      <p class="auth-nogo">Access is invitation-only. No public sign-up — ask your lab admin<br>for an invite if you don't have an account yet.</p>
+    </div>
+
+    <!-- ---- ACCEPT INVITE ---- -->
+    <div class="pane" id="pane-invite">
+      <p class="auth-title">You've been invited</p>
+      <p class="auth-sub">Set a password to activate your RNAnix account.</p>
+      <div class="invite-note"><b>Das Lab</b> invited <b>j.doe@janelia.hhmi.org</b> to RNAnix. This link expires in 7 days.</div>
+      <form onsubmit="event.preventDefault(); location.href='index.html';">
+        <div class="field"><label>Email</label><input type="email" value="j.doe@janelia.hhmi.org" readonly></div>
+        <div class="field">
+          <label>New password</label>
+          <input type="password" id="pw" placeholder="Create a password" oninput="checkStrength()">
+          <div class="strength" id="strength">
+            <span data-k="len">8+ characters</span>
+            <span data-k="up">1 uppercase</span>
+            <span data-k="num">1 number</span>
+            <span data-k="sp">1 special char</span>
+          </div>
+        </div>
+        <div class="field"><label>Confirm password</label><input type="password" placeholder="Repeat password"></div>
+        <button class="btn-primary" type="submit">Set password &amp; continue →</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script>
+document.querySelectorAll('.auth-tabs button').forEach(function (b) {
+  b.onclick = function () {
+    document.querySelectorAll('.auth-tabs button').forEach(function (x) { x.classList.remove('active'); });
+    document.querySelectorAll('.pane').forEach(function (x) { x.classList.remove('active'); });
+    b.classList.add('active');
+    document.getElementById('pane-' + b.dataset.pane).classList.add('active');
+  };
+});
+function checkStrength() {
+  var v = document.getElementById('pw').value;
+  var rules = { len: v.length >= 8, up: /[A-Z]/.test(v), num: /[0-9]/.test(v), sp: /[^A-Za-z0-9]/.test(v) };
+  Object.keys(rules).forEach(function (k) {
+    document.querySelector('#strength [data-k="' + k + '"]').classList.toggle('ok', rules[k]);
+  });
+}
+</script>
+</body>
+</html>
