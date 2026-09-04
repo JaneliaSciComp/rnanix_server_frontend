@@ -90,34 +90,6 @@
       </div>
     </div>
 
-    <div class="viewer-toolbar" id="viewerToolbar">
-      <!-- row 1: style + color as button groups -->
-      <div class="vt-row1">
-        <div class="btn-group" id="styleGroup">
-          <button class="seg-btn active" data-style="Cartoon">Cartoon</button>
-          <button class="seg-btn" data-style="Surface">Surface</button>
-          <button class="seg-btn" data-style="Ball & stick">Ball &amp; stick</button>
-        </div>
-        <div class="btn-group" id="colorGroup">
-          <button class="seg-btn active" data-color="Chain">Chain</button>
-          <button class="seg-btn" data-color="Rainbow">Rainbow</button>
-          <button class="seg-btn" data-color="pLDDT">pLDDT</button>
-          <button class="seg-btn" data-color="Element">Element</button>
-        </div>
-        <button class="icon-btn" id="measureBtn" title="Measure distance">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="7" width="19" height="10" rx="1.5"/><path d="M7 7v3M11 7v3M15 7v3M19 7v5"/></svg>
-        </button>
-      </div>
-      <!-- row 2: collapsible sequence accordion -->
-      <button class="seq-acc-head" id="seqAccHead">
-        <svg class="seq-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
-        Sequence
-      </button>
-      <div class="seq-acc-body" id="seqPanel" hidden>
-        <div class="sp-body" id="seqBody"></div>
-      </div>
-    </div>
-
     <div class="vtabs">
       <button class="vtab active" data-tab="3d">3D</button>
       <button class="vtab" data-tab="ss">SS</button>
@@ -129,6 +101,34 @@
 
     <!-- ---- 3D tab ---- -->
     <div class="tabpanel active" data-panel="3d">
+      <div class="viewer-toolbar" id="viewerToolbar">
+        <!-- row 1: style + color as button groups -->
+        <div class="vt-row1">
+          <div class="btn-group" id="styleGroup">
+            <button class="seg-btn active" data-style="Cartoon">Cartoon</button>
+            <button class="seg-btn" data-style="Surface">Surface</button>
+            <button class="seg-btn" data-style="Ball & stick">Ball &amp; stick</button>
+          </div>
+          <div class="btn-group" id="colorGroup">
+            <button class="seg-btn active" data-color="Chain">Chain</button>
+            <button class="seg-btn" data-color="Rainbow">Rainbow</button>
+            <button class="seg-btn" data-color="pLDDT">pLDDT</button>
+            <button class="seg-btn" data-color="Element">Element</button>
+          </div>
+          <button class="icon-btn" id="measureBtn" title="Measure distance">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="7" width="19" height="10" rx="1.5"/><path d="M7 7v3M11 7v3M15 7v3M19 7v5"/></svg>
+          </button>
+        </div>
+        <!-- row 2: collapsible sequence accordion -->
+        <button class="seq-acc-head" id="seqAccHead">
+          <svg class="seq-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+          Sequence
+        </button>
+        <div class="seq-acc-body" id="seqPanel" hidden>
+          <div class="sp-body" id="seqBody"></div>
+        </div>
+      </div>
+      <!-- row 3: the 3D canvas itself -->
       <div class="canvas-wrap">
         <div id="mstarContainer" class="mstar-container"></div>
         <div class="viewer-msg" id="viewerMsg">Loading…</div>

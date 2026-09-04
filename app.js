@@ -610,7 +610,6 @@
   function switchTab(tab) {
     document.querySelectorAll('.vtab').forEach(function (b) { b.classList.toggle('active', b.dataset.tab === tab); });
     document.querySelectorAll('.tabpanel').forEach(function (p) { p.classList.toggle('active', p.dataset.panel === tab); });
-    $('viewerToolbar').style.display = tab === '3d' ? 'flex' : 'none';
     if (tab === 'ss') { renderSSPanel(); if (ssMode === 'flatten' && !ssPollTimer) ssPollTimer = setInterval(renderSSPanel, 200); }
     else { clearInterval(ssPollTimer); ssPollTimer = null; }
   }
