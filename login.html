@@ -25,9 +25,10 @@
     <div class="pane active" id="pane-login">
       <p class="auth-title">Welcome back</p>
       <p class="auth-sub">Sign in with the account your lab admin set up for you.</p>
-      <form onsubmit="event.preventDefault(); location.href='index.html';">
-        <div class="field"><label>Email</label><input type="email" placeholder="you@lab.edu" value="zouinkhim@janelia.hhmi.org"></div>
-        <div class="field"><label>Password</label><input type="password" placeholder="••••••••" value="••••••••••"></div>
+      <form id="loginForm">
+        <div class="field"><label>Email</label><input type="email" id="login-email" placeholder="you@lab.edu" value="zouinkhim@janelia.hhmi.org"></div>
+        <div class="field"><label>Password</label><input type="password" id="login-pw" placeholder="••••••••"></div>
+        <p class="auth-error" id="login-error" hidden></p>
         <div class="auth-forgot"><a href="#">Forgot password?</a></div>
         <button class="btn-primary" type="submit">Log in →</button>
       </form>
@@ -38,9 +39,9 @@
     <div class="pane" id="pane-invite">
       <p class="auth-title">You've been invited</p>
       <p class="auth-sub">Set a password to activate your RNAnix account.</p>
-      <div class="invite-note"><b>Das Lab</b> invited <b>zouinkhim@janelia.hhmi.org</b> to RNAnix. This link expires in 7 days.</div>
-      <form onsubmit="event.preventDefault(); location.href='index.html';">
-        <div class="field"><label>Email</label><input type="email" value="zouinkhim@janelia.hhmi.org" readonly></div>
+      <div class="invite-note" id="invite-note"><b>Your lab admin</b> invited you to RNAnix. Log in with the temporary password from your invite email first — this pane activates once Cognito asks for a new one.</div>
+      <form id="inviteForm">
+        <div class="field"><label>Email</label><input type="email" id="invite-email" value="zouinkhim@janelia.hhmi.org"></div>
         <div class="field">
           <label>New password</label>
           <input type="password" id="pw" placeholder="Create a password" oninput="checkStrength()">
@@ -51,13 +52,15 @@
             <span data-k="sp">1 special char</span>
           </div>
         </div>
-        <div class="field"><label>Confirm password</label><input type="password" placeholder="Repeat password"></div>
+        <div class="field"><label>Confirm password</label><input type="password" id="invite-pw2" placeholder="Repeat password"></div>
+        <p class="auth-error" id="invite-error" hidden></p>
         <button class="btn-primary" type="submit">Set password &amp; continue →</button>
       </form>
     </div>
   </div>
 </div>
 
+<script src="auth.js"></script>
 <script src="app.js"></script>
 <script>
 document.querySelectorAll('.auth-tabs button').forEach(function (b) {
@@ -75,6 +78,50 @@ function checkStrength() {
     document.querySelector('#strength [data-k="' + k + '"]').classList.toggle('ok', rules[k]);
   });
 }
+
+// pendingInviteSession carries a NEW_PASSWORD_REQUIRED challenge's Session token from the login
+// pane to the invite pane — Cognito needs it back in RespondToAuthChallenge.
+var pendingInviteSession = null;
+
+document.getElementById('loginForm').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var errEl = document.getElementById('login-error'); errEl.hidden = true;
+  if (!window.RNAnixAuth || !RNAnixAuth.configured()) { location.href = 'index.html'; return; } // mockup fallback
+  var email = document.getElementById('login-email').value.trim();
+  var pw = document.getElementById('login-pw').value;
+  try {
+    await RNAnixAuth.login(email, pw);
+    location.href = 'index.html';
+  } catch (err) {
+    if (err.challenge === 'NEW_PASSWORD_REQUIRED') {
+      pendingInviteSession = err.session;
+      document.getElementById('invite-email').value = email;
+      document.getElementById('invite-note').innerHTML = '<b>' + email + '</b> — this account has a temporary password. Set a permanent one below to finish activating it.';
+      document.querySelectorAll('.auth-tabs button').forEach(function (x) { x.classList.remove('active'); });
+      document.querySelectorAll('.pane').forEach(function (x) { x.classList.remove('active'); });
+      document.querySelector('.auth-tabs button[data-pane="invite"]').classList.add('active');
+      document.getElementById('pane-invite').classList.add('active');
+    } else {
+      errEl.textContent = err.message || 'Login failed.'; errEl.hidden = false;
+    }
+  }
+});
+
+document.getElementById('inviteForm').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var errEl = document.getElementById('invite-error'); errEl.hidden = true;
+  if (!window.RNAnixAuth || !RNAnixAuth.configured()) { location.href = 'index.html'; return; } // mockup fallback
+  var email = document.getElementById('invite-email').value.trim();
+  var pw = document.getElementById('pw').value, pw2 = document.getElementById('invite-pw2').value;
+  if (pw !== pw2) { errEl.textContent = 'Passwords do not match.'; errEl.hidden = false; return; }
+  if (!pendingInviteSession) { errEl.textContent = 'Log in with your temporary password first (Log in tab).'; errEl.hidden = false; return; }
+  try {
+    await RNAnixAuth.completeNewPassword(email, pw, pendingInviteSession);
+    location.href = 'index.html';
+  } catch (err) {
+    errEl.textContent = err.message || 'Could not set password.'; errEl.hidden = false;
+  }
+});
 </script>
 </body>
 </html>

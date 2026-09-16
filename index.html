@@ -34,7 +34,7 @@
         <div class="wn">Z. Marwan</div>
         <div class="we">zouinkhim@janelia.hhmi.org</div>
       </div>
-      <a class="logout" href="login.html">Log out</a>
+      <a class="logout" href="login.html" id="logoutBtn">Log out</a>
     </div>
   </aside>
 
@@ -45,6 +45,7 @@
       <span class="badge">Protenix v1.1</span>
       <button class="adv-toggle" title="Manual form for power users — seeds, samples, MSA mode, Expert mode">Advanced form ⌄</button>
     </div>
+    <div class="jobs-panel" id="jobsPanel" hidden><!-- filled by app.js --></div>
     <div class="chat-body" id="chatBody"><!-- filled by app.js --></div>
     <div class="chat-inputbar">
       <div class="input-toolbar">
@@ -232,6 +233,8 @@
 </div>
 
 <input type="file" id="fileHidden" hidden accept=".txt,.csv,.fasta,.fa">
+<script src="auth.js"></script>
+<script>if (window.RNAnixAuth) RNAnixAuth.requireAuth();</script>
 <script src="app.js"></script>
 </body>
 </html>

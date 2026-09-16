@@ -1,12 +1,20 @@
-// RNAnix v2 — mockup shell around a REAL Mol* viewer + real client-side data tools.
-// No RNAnix backend anywhere: structures are fetched live from public RCSB URLs (not "our"
-// pipeline), and everything else (filtering, folding, downloads, MSA/ChemMap/MoHCA parsing)
-// runs entirely in this file. Only the multi-step "predict a structure" flow and the chat
-// replies themselves are simulated, since those genuinely require the real Protenix/Claude
-// backend this repo deploys.
+// RNAnix v2 — chat shell around a REAL Mol* viewer + real client-side data tools, wired to the
+// real rna-atlas-inference backend (same bridge Lambda / Step Functions pipeline as v1's
+// /inference page) when window.INFER_API is set. With INFER_API unset this still runs as a full
+// offline mockup: predictions fall back to a staged demo instead of a network call, exactly the
+// same "demo mode" convention as frontend/inference.js in the backend repo.
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   if (!$('chatBody')) return; // login.html doesn't need any of this
+
+  // ================= real backend wiring =================
+  // Set before this file loads, e.g. <script>window.INFER_API = "https://xyz.execute-api...";
+  // window.INFER_TOKEN = "...";</script> — same contract as frontend/inference.js in
+  // rna-atlas-inference. Empty INFER_API => every backend call below is skipped in favor of the
+  // existing staged/simulated flow.
+  var API = (window.INFER_API || '').replace(/\/$/, '');
+  function tok() { return window.INFER_TOKEN || ''; }
+  function fmtOf(text) { return (text.startsWith('data_') || text.includes('_atom_site')) ? 'cif' : 'pdb'; }
 
   // ================= small utilities =================
   var _enc = function (s) { return new TextEncoder().encode(s); };
@@ -77,6 +85,23 @@
   var ICON_WRENCH = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L2 19l3 3 7.3-7.3a4 4 0 0 0 5.4-5.4l-2.8 2.8-2-2z"/></svg>';
   var ICON_SPARKLE = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-1px"><path d="M12 2l1.8 5.2L19 9l-5.2 1.8L12 16l-1.8-5.2L5 9l5.2-1.8z"/></svg>';
   var ICON_EXTLINK = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M7 17L17 7"/><path d="M8 7h9v9"/></svg>';
+  var ICON_WARNING = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M10.3 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+  // Backend errors often arrive as "<context>: <raw JSON from the upstream API>" (e.g. Claude's
+  // {"error":{"message":"..."}}) -- pull out just the human message instead of showing the raw
+  // blob verbatim in a chat bubble.
+  function extractErrorMessage(raw) {
+    if (!raw) return '';
+    var s = String(raw);
+    var m = s.match(/\{[\s\S]*\}/);
+    if (m) {
+      try {
+        var j = JSON.parse(m[0]);
+        var msg = (j.error && (j.error.message || j.error.type)) || j.message;
+        if (msg) return msg;
+      } catch (e) { /* not JSON, or not the shape we expect -- fall through */ }
+    }
+    return s;
+  }
   var WATER = { HOH: 1, WAT: 1, H2O: 1 };
   var IONS = { NA: 1, MG: 1, K: 1, CL: 1, CA: 1, ZN: 1, MN: 1, FE: 1, CU: 1, CO: 1, NI: 1, CD: 1, BR: 1, IOD: 1, CS: 1, LI: 1, SR: 1, BA: 1 };
   var NT1 = { A: 'A', C: 'C', G: 'G', U: 'U', T: 'T', DA: 'A', DC: 'C', DG: 'G', DT: 'T' };
@@ -187,12 +212,15 @@
     }
     for (var i = 0; i < layers.length; i++) {
       var L = layers[i]; if (!L.visible) continue;
-      var text = filterPdbText(L.text, compHide);
+      // Component (polymer/ligand/water/ion) filtering is PDB-fixed-column text surgery — it
+      // does not apply to mmCIF results (e.g. a fresh prediction), which render unfiltered.
+      var fmt = L.format === 'cif' ? 'mmcif' : 'pdb';
+      var text = L.format === 'cif' ? L.text : filterPdbText(L.text, compHide);
       try {
-        if (opts) await v.loadStructureFromData(text, 'pdb', opts);
-        else await v.loadStructureFromData(text, 'pdb');
+        if (opts) await v.loadStructureFromData(text, fmt, opts);
+        else await v.loadStructureFromData(text, fmt);
       } catch (e) {
-        try { await v.loadStructureFromData(text, 'pdb'); }
+        try { await v.loadStructureFromData(text, fmt); }
         catch (e2) { setViewerMsg('Could not render ' + L.label + ' (' + e2.message + ').'); }
       }
     }
@@ -287,6 +315,13 @@
     var body = $('seqBody');
     if (!L) { if (body) body.innerHTML = ''; return; }
     var parsed = L.parsed;
+    if (!parsed) {
+      // mmCIF result (a fresh prediction): the sequence panel/SS tab only parse legacy PDB
+      // fixed-column text today, so this is an honest gap, not a silent failure.
+      curResidues = {}; curResKeys = []; curSeq = '';
+      if (body) body.innerHTML = '<div class="sp-empty">Sequence panel needs PDB-format text — this structure loaded as mmCIF.</div>';
+      return;
+    }
     curResidues = parsed.residues;
     var primaryChain = pickPrimaryChain(parsed);
     curResKeys = parsed.chains[primaryChain] || [];
@@ -894,7 +929,10 @@
     "Run Expert-mode research on this riboswitch",
     "Export the current structure as a .zip",
   ];
-  var THREADS = [
+  // Real discussions (and their jobs) persist to localStorage (see saveThreads/loadThreads
+  // below) -- once anything real has been saved, it replaces this canned demo set entirely,
+  // same as v1's jobs panel starts empty rather than mixing sample data with real jobs.
+  var THREADS = loadThreads() || [
     {
       id: "t1", title: "1EHZ tRNA · color by chain", sub: "2 min ago", structure: "1EHZ — tRNA-Phe", pdb: "1EHZ",
       msgs: [
@@ -944,6 +982,7 @@
   function msgHtml(m) {
     if (m.tool) return '<div class="tool-card"><div class="tc-call">' + ICON_WRENCH + ' <b>' + m.tool + '</b>(' + m.args + ')</div><div class="tc-ok"><span class="chk">✓</span> ' + m.result + '</div></div>';
     if (m.role === 'user') return '<div class="msg user"><div class="bubble">' + m.text + '</div></div>';
+    if (m.error) return '<div class="msg assistant"><div class="who-lbl err"><span class="dot"></span> ' + ICON_WARNING + ' RNAnix</div><div class="bubble bubble-error">' + m.text + '</div></div>';
     var think = m.thinking ? '<details class="reasoning"><summary>' + ICON_SPARKLE + ' Claude’s reasoning</summary><div class="reasoning-body">' + m.thinking + '</div></details>' : '';
     var srcs = (m.sources && m.sources.length) ? '<div class="src-row">' + m.sources.map(function (s) { return '<a class="src-pill" href="' + s.url + '" target="_blank" rel="noopener">' + s.label + '</a>'; }).join('') + '</div>' : '';
     return '<div class="msg assistant"><div class="who-lbl"><span class="dot"></span> RNAnix</div>' + think + '<div class="bubble">' + m.text + '</div>' + srcs + '</div>';
@@ -951,6 +990,7 @@
   function render() {
     var t = THREADS.filter(function (x) { return x.id === curId; })[0];
     renderHistory();
+    renderJobsPanel(t);
     if (!t) {
       $('chatTitle').textContent = 'New chat';
       $('viewerName').textContent = 'No structure loaded';
@@ -960,6 +1000,7 @@
         '<p>Ask in plain language — fetches, styling, and structure edits run for real, client-side, against live RCSB data.</p>' +
         '<div class="cards">' + EXAMPLE_CARDS.map(function (c) { return '<div class="card" data-fill="' + c.replace(/"/g, '&quot;') + '">' + c + '</div>'; }).join('') + '</div></div>';
       $('chatBody').querySelectorAll('.card').forEach(function (el) { el.onclick = function () { $('msgInput').value = el.dataset.fill; $('msgInput').focus(); }; });
+      saveThreads();
       return;
     }
     $('chatTitle').textContent = t.title;
@@ -967,6 +1008,7 @@
     $('chatBody').scrollTop = $('chatBody').scrollHeight;
     if (t.pdb && curPdbId !== t.pdb) loadStructure(t.pdb, t.structure);
     else if (t.structure) $('viewerName').textContent = t.structure;
+    saveThreads();
   }
   $('newChatBtn').onclick = function () { curId = null; render(); };
 
@@ -974,8 +1016,217 @@
   var PDB_RE = /\b([0-9][a-zA-Z0-9]{3})\b/;
   function currentThread() {
     var t = THREADS.filter(function (x) { return x.id === curId; })[0];
-    if (!t) { t = { id: 'live-' + Date.now(), title: 'New chat', sub: 'now', structure: 'No structure loaded', pdb: null, msgs: [] }; THREADS.unshift(t); curId = t.id; }
+    if (!t) {
+      t = { id: 'live-' + Date.now(), title: 'New chat', sub: 'now', structure: 'No structure loaded', pdb: null, msgs: [], jobs: [] };
+      THREADS.unshift(t); curId = t.id;
+      // A brand-new thread only exists once it has content -- persist it here, at creation,
+      // rather than waiting for the next render() (send() renders AFTER pushing the user's
+      // message, so this alone isn't strictly required, but it means the thread is safely
+      // stored even if something throws before that render() call).
+      saveThreads();
+    }
     return t;
+  }
+
+  // ================= per-discussion job tracking + persistence =================
+  var THREADS_KEY = 'rnanix_threads_v1';
+  function saveThreads() {
+    try {
+      localStorage.setItem(THREADS_KEY, JSON.stringify(THREADS.slice(0, 50)));
+    } catch (e) { /* storage full/unavailable -- persistence is best-effort */ }
+  }
+  function loadThreads() {
+    try {
+      var raw = localStorage.getItem(THREADS_KEY);
+      if (!raw) return null;
+      var parsed = JSON.parse(raw);
+      return (Array.isArray(parsed) && parsed.length) ? parsed : null;
+    } catch (e) { return null; }
+  }
+  function registerJob(t, jobId, meta) {
+    t.jobs = t.jobs || [];
+    if (t.jobs.some(function (j) { return j.job_id === jobId; })) return;
+    t.jobs.unshift({ job_id: jobId, state: 'submitted', ts: Date.now(), model: (meta && meta.model) || DEFAULT_MODEL });
+  }
+  function updateJob(t, jobId, patch) {
+    t.jobs = t.jobs || [];
+    var j = t.jobs.filter(function (x) { return x.job_id === jobId; })[0];
+    if (!j) return;
+    Object.keys(patch).forEach(function (k) { j[k] = patch[k]; });
+  }
+  function fmtJobTime(ts) {
+    if (!ts) return '';
+    var diff = Date.now() - ts;
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return Math.round(diff / 60000) + 'm ago';
+    if (diff < 86400000) return Math.round(diff / 3600000) + 'h ago';
+    return new Date(ts).toLocaleDateString();
+  }
+  function jobPillHtml(state) {
+    var cls = state === 'done' ? 'job-done' : state === 'error' ? 'job-error' : 'job-running';
+    return '<span class="job-pill ' + cls + '">' + state + '</span>';
+  }
+  function renderJobsPanel(t) {
+    var el = $('jobsPanel'); if (!el) return;
+    var jobs = (t && t.jobs) || [];
+    if (!jobs.length) { el.hidden = true; el.innerHTML = ''; return; }
+    el.hidden = false;
+    el.innerHTML = '<span class="jobs-label">Jobs in this discussion</span>' + jobs.map(function (j) {
+      var clickable = j.state === 'done';
+      return '<div class="job-row' + (clickable ? ' clickable' : '') + '" data-job="' + j.job_id + '" title="' + j.job_id + '">' +
+        '<span class="job-id">' + j.job_id.split(':').slice(0, 2).join(':') + '</span>' + jobPillHtml(j.state) +
+        '<span class="job-time">' + fmtJobTime(j.ts) + '</span></div>';
+    }).join('');
+    el.querySelectorAll('.job-row.clickable').forEach(function (row) {
+      row.onclick = function () { reopenJob(t, row.dataset.job); };
+    });
+  }
+  // Re-displays an already-finished job's structure without re-submitting anything.
+  async function reopenJob(t, jobId) {
+    if (!API) return;
+    try {
+      var j = await (await fetch(API + '/status?job=' + encodeURIComponent(jobId) + (tok() ? '&t=' + encodeURIComponent(tok()) : ''))).json();
+      var m = mapPredictStatus(j);
+      var stage = (m.msa && (m.msa.url || m.msa.cif)) ? m.msa : ((m.nomsa && (m.nomsa.url || m.nomsa.cif)) ? m.nomsa : null);
+      if (!stage) { toast('No stored result for this job anymore.'); return; }
+      var text = await fetchStageResult(stage);
+      await addPredictionLayer(text, jobId + ' (reopened)');
+      t.structure = jobId + ' (reopened)'; t.pdb = null;
+      render();
+    } catch (e) { toast('Could not reopen job: ' + e.message); }
+  }
+  // ================= real predict/status wiring (rna-atlas-inference bridge) =================
+  var AVAILABLE_MODELS = null, DEFAULT_MODEL = 'default';
+  async function loadAvailableModels() {
+    if (!API) return;
+    try {
+      var r = await fetch(API + '/models' + (tok() ? '?t=' + encodeURIComponent(tok()) : ''));
+      var j = await r.json();
+      AVAILABLE_MODELS = j.models || j || [];
+      if (AVAILABLE_MODELS.length) DEFAULT_MODEL = AVAILABLE_MODELS[0].id || AVAILABLE_MODELS[0];
+    } catch (e) { /* /models is best-effort; DEFAULT_MODEL stays the fallback */ }
+  }
+  // A plain pasted sequence in chat (no entity modal) — longest run of RNA letters, length >= 8.
+  function extractSequenceFromText(v) {
+    var m = v.toUpperCase().match(/[ACGU]{8,}/g);
+    if (!m) return null;
+    return m.reduce(function (a, b) { return b.length > a.length ? b : a; }, '');
+  }
+  // Prefer whatever was built in the entity modal (Include sequence); it survives after
+  // "Insert into message" since modalEntities isn't cleared on insert. Otherwise fall back to a
+  // bare sequence typed straight into the chat message.
+  function buildPredictEntities(v) {
+    var used = modalEntities.filter(function (e) { return entCleanSeq(e.type, e.seq).length > 0; });
+    if (used.length) return used.map(function (e) { return { type: e.type, sequence: entCleanSeq(e.type, e.seq), count: entClampCount(e.count) }; });
+    var seq = extractSequenceFromText(v);
+    return seq ? [{ type: 'rna', sequence: seq, count: 1 }] : null;
+  }
+  async function fetchStageResult(stage) {
+    if (stage.url) return (await fetch(stage.url + (stage.url.includes('?') ? '' : (tok() ? '?t=' + encodeURIComponent(tok()) : '')))).text();
+    return stage.cif || '';
+  }
+  function mapPredictStatus(j) {
+    var st = j.stages || {}, nm = st.nomsa || {}, ms = st.msa || {};
+    var hasResult = nm.url || nm.cif || ms.url || ms.cif;
+    return { state: j.state || 'unknown', error: j.error, nomsa: nm, msa: ms, done: j.state === 'done' || !!hasResult };
+  }
+  function addPredictionLayer(text, label) {
+    var fmt = fmtOf(text);
+    var L = { id: 'L' + (nextLayerId++), pdbId: label, label: label, text: text, format: fmt, visible: true,
+      parsed: fmt === 'pdb' ? parseResidues(text) : null };
+    layers = [L]; // a prediction result replaces the primary structure, like loadStructure()
+    syncPrimaryAliases();
+    compHide = { polymer: false, ligand: false, water: false, ion: false };
+    syncCompUI();
+    return renderLayers(themeChosen).then(function () { buildSeqPanel(); renderLayersMenu(); });
+  }
+  async function showPredictionBrief(jobId, t) {
+    if (!API) return;
+    try {
+      var r = await (await fetch(API + '/brief?job=' + encodeURIComponent(jobId) + (tok() ? '&t=' + encodeURIComponent(tok()) : ''))).json();
+      if (!r.brief && !r.rationale && !r.thinking) return;
+      t.msgs.push({ role: 'assistant', text: r.brief || r.rationale || 'Research finished.', thinking: r.thinking,
+        sources: (r.template_pdb_ids || []).map(function (id) { return { label: 'PDB ' + id, url: 'https://www.rcsb.org/structure/' + id }; }) });
+      render();
+    } catch (e) { /* Expert-mode brief is best-effort */ }
+  }
+  // card (a chat tool-card being live-updated) is optional -- resuming a poll for a job
+  // restored from localStorage after a reload has no in-flight chat message to mutate, only
+  // the jobs-panel entry (registerJob/updateJob), which always gets tracked either way.
+  async function pollPrediction(jobId, t, card) {
+    registerJob(t, jobId);
+    for (var i = 0; i < 300; i++) {
+      var j;
+      try { j = await (await fetch(API + '/status?job=' + encodeURIComponent(jobId) + (tok() ? '&t=' + encodeURIComponent(tok()) : ''))).json(); }
+      catch (e) { if (card) card.result = 'status check failed: ' + e.message; render(); return; }
+      var m = mapPredictStatus(j);
+      if (card) card.result = 'state: ' + m.state;
+      if (m.state === 'error') {
+        updateJob(t, jobId, { state: 'error', error: m.error });
+        t.msgs.push({ role: 'assistant', error: true, text: extractErrorMessage(m.error) || 'The prediction failed with no further detail from the backend.' });
+        render(); return;
+      }
+      updateJob(t, jobId, { state: 'running' });
+      render();
+      var stage = (m.msa && (m.msa.url || m.msa.cif)) ? m.msa : ((m.nomsa && (m.nomsa.url || m.nomsa.cif)) ? m.nomsa : null);
+      if (stage) {
+        var text;
+        try { text = await fetchStageResult(stage); }
+        catch (e) { t.msgs.push({ role: 'assistant', error: true, text: 'Got a result but could not fetch the structure text: ' + e.message }); render(); return; }
+        var jobName = (t.title !== 'New chat' && t.title) || jobId;
+        await addPredictionLayer(text, jobName + ' (prediction)');
+        t.pdb = null; t.structure = jobName + ' (prediction)';
+        if (card) card.result = 'done — structure loaded in the viewer';
+        updateJob(t, jobId, { state: 'done' });
+        t.msgs.push({ role: 'assistant', text: 'Done — that\'s a real predicted structure from the AWS pipeline, loaded in the viewer on the right (job ' + jobId + ').' });
+        render();
+        showPredictionBrief(jobId, t);
+        return;
+      }
+      if (m.done) { updateJob(t, jobId, { state: 'done' }); render(); return; }
+      await new Promise(function (res) { setTimeout(res, 3000); });
+    }
+    updateJob(t, jobId, { state: 'error', error: 'client-side poll gave up after ~15 minutes' });
+    t.msgs.push({ role: 'assistant', text: 'This prediction is taking longer than expected — job ' + jobId + ' is still running on the backend.' });
+    render();
+  }
+  async function realPredict(v, t) {
+    if (!API) return simulatePrediction(t);
+    var entities = buildPredictEntities(v);
+    if (!entities) {
+      t.msgs.push({ role: 'assistant', text: 'I need an actual sequence to predict — paste one directly, or use "Include sequence" to build a multi-entity structure.' });
+      render(); return;
+    }
+    var expert = /expert|research/.test(v.toLowerCase());
+    var legacyRna = entities.filter(function (e) { return e.type === 'rna'; })[0];
+    var body = {
+      sequence: legacyRna ? legacyRna.sequence : '',
+      entities: entities,
+      name: '',
+      model: DEFAULT_MODEL,
+      options: { mode: 'protenix-mt', seeds: 3, samples: 5, relax: true, expert: expert, description: v.slice(0, 500), live_thinking: expert },
+      token: tok(),
+    };
+    var card = { tool: 'predict.submit', args: 'model="' + DEFAULT_MODEL + '"' + (expert ? ', expert=true' : ''), result: 'submitting…' };
+    t.msgs.push(card); render();
+    var jobId, j0;
+    try {
+      var r = await fetch(API + '/predict', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      j0 = await r.json().catch(function () { return null; });
+      if (!r.ok && (!j0 || !j0.error)) throw new Error('HTTP ' + r.status);
+      if (j0 && j0.error) throw new Error(j0.error);
+      jobId = j0.job_id;
+      if (!jobId) throw new Error('no job_id in response');
+    } catch (e) {
+      card.result = 'submit failed: ' + e.message;
+      t.msgs.push({ role: 'assistant', error: true, text: extractErrorMessage(e.message) });
+      render(); return;
+    }
+    card.result = (String(j0.status || '').toUpperCase() === 'CACHED') ? 'cached — reusing a prior result' : 'queued · job_id ' + jobId;
+    render();
+    t.msgs.push({ tool: 'predict.status', args: 'poll', result: 'running…' });
+    render();
+    pollPrediction(jobId, t, t.msgs[t.msgs.length - 1]);
   }
   function simulatePrediction(t) {
     var stages = [
@@ -1018,8 +1269,44 @@
     if (/rainbow/.test(lower) && curPdbText) { setColorBtn('Rainbow'); themeChosen = true; renderLayers(true); t.msgs.push({ tool: "pymol_mcp.color", args: 'scheme="rainbow"', result: "Applied" }); acted = true; }
     else if (/color.*chain|by chain/.test(lower) && curPdbText) { setColorBtn('Chain'); themeChosen = true; renderLayers(true); t.msgs.push({ tool: "pymol_mcp.color", args: 'scheme="chain"', result: "Applied" }); acted = true; }
     if (/zip|download|export/.test(lower)) { doDownload('zip'); t.msgs.push({ tool: "download.export", args: 'format="zip"', result: curPdbId ? "Bundled " + curPdbId + "_bundle.zip" : "nothing loaded yet" }); acted = true; }
-    if (/predict|fold this|structure for this (rna|sequence)/.test(lower)) { simulatePrediction(t); acted = true; }
-    if (!acted) t.msgs.push({ role: "assistant", text: "(mockup chat) Try phrases like “fetch 1EHZ”, “color by chain”, “remove water”, “show surface”, “export as zip”, or “predict a structure for this sequence” — those run real client-side actions against the viewer." });
+    if (/predict|fold this|structure for this (rna|sequence)/.test(lower)) { realPredict(v, t); acted = true; }
+    if (!acted) realChat(v, t);
+    render();
+  }
+  // ================= real chat wiring (Claude, via the same bridge Lambda) =================
+  // Only plain user/assistant turns go to Claude -- tool-cards from the client-side command
+  // parser above are real actions already reported to the user, not part of the conversation
+  // Claude needs to see (and Anthropic's API rejects unpaired tool_use/tool_result blocks, which
+  // canned demo threads don't have anyway).
+  function buildChatMessages(t) {
+    return t.msgs.filter(function (m) { return m.role === 'user' || m.role === 'assistant'; })
+      .map(function (m) { return { role: m.role, content: m.text || '' }; });
+  }
+  async function realChat(v, t) {
+    if (!API) {
+      t.msgs.push({ role: 'assistant', text: '(mockup chat) Try phrases like “fetch 1EHZ”, “color by chain”, “remove water”, “show surface”, “export as zip”, or “predict a structure for this sequence” — those run real client-side actions against the viewer.' });
+      render(); return;
+    }
+    var messages = buildChatMessages(t);
+    var j;
+    try {
+      var r = await fetch(API + '/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages: messages, token: tok() }) });
+      // The bridge always answers with a JSON body, even on a 4xx/5xx (e.g. {"error": "..."}) --
+      // parse it before deciding the request failed, so a real backend error message reaches the
+      // chat instead of being collapsed into a bare "HTTP 502".
+      j = await r.json().catch(function () { return null; });
+      if (!r.ok && (!j || !j.error)) throw new Error('HTTP ' + r.status);
+    } catch (e) {
+      t.msgs.push({ role: 'assistant', error: true, text: 'Could not reach the chat backend (' + e.message + ').' });
+      render(); return;
+    }
+    (j.tool_calls || []).forEach(function (c) {
+      var errored = c.result && c.result.error;
+      t.msgs.push({ tool: c.name, args: JSON.stringify(c.input || {}), result: errored ? ('error: ' + extractErrorMessage(c.result.error)) : 'ok' });
+      if (c.name === 'submit_prediction' && c.result && c.result.job_id && !errored) pollPrediction(c.result.job_id, t, t.msgs[t.msgs.length - 1]);
+    });
+    if (j.error) t.msgs.push({ role: 'assistant', error: true, text: extractErrorMessage(j.error) });
+    else t.msgs.push({ role: 'assistant', text: j.reply || '(no reply)' });
     render();
   }
   function send() {
@@ -1035,6 +1322,7 @@
   $('msgInput').addEventListener('input', function () { this.style.height = 'auto'; this.style.height = Math.min(140, this.scrollHeight) + 'px'; });
 
   // ================= sidebar collapse + viewer drag-to-resize =================
+  if ($('logoutBtn')) $('logoutBtn').onclick = function (e) { if (window.RNAnixAuth && RNAnixAuth.configured()) { e.preventDefault(); RNAnixAuth.logout(); } };
   $('sidebarToggle').onclick = function () { $('sidebar').classList.toggle('collapsed'); };
   (function () {
     var handle = $('resizeHandle'), viewer = document.querySelector('.viewer');
@@ -1065,4 +1353,15 @@
   renderTemplates();
   renderInfo();
   render();
+  loadAvailableModels();
+  // Resume polling for any job that was still running when the page last closed/reloaded --
+  // otherwise a restored "running" badge would just sit there stale forever, since nothing else
+  // re-checks it.
+  if (API) {
+    THREADS.forEach(function (t) {
+      (t.jobs || []).forEach(function (j) {
+        if (j.state === 'submitted' || j.state === 'running') pollPrediction(j.job_id, t);
+      });
+    });
+  }
 })();

@@ -115,6 +115,7 @@ button { font-family: inherit; cursor: pointer; }
 .auth-foot { text-align: center; font-size: 12.5px; color: var(--text-muted); margin-top: 16px; }
 .auth-forgot { text-align: right; font-size: 12px; margin: -8px 0 14px; }
 .auth-nogo { text-align: center; font-size: 11.5px; color: var(--text-dim); margin-top: 22px; line-height: 1.5; }
+.auth-error { color: #ef476f; font-size: 12.5px; margin: -4px 0 10px; }
 
 .pane { display: none; }
 .pane.active { display: block; }
@@ -208,6 +209,24 @@ button { font-family: inherit; cursor: pointer; }
 }
 .adv-toggle:hover { color: var(--text); border-color: var(--accent-dim); }
 
+.jobs-panel {
+  flex: none; padding: 10px 20px; border-bottom: 1px solid var(--border-soft);
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+}
+.jobs-panel .jobs-label { font-size: 11px; color: var(--text-dim); margin-right: 4px; }
+.job-row {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 999px;
+  padding: 4px 10px 4px 12px; cursor: default;
+}
+.job-row.clickable { cursor: pointer; }
+.job-row.clickable:hover { border-color: var(--accent-dim); }
+.job-row .job-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text-muted); }
+.job-pill { font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 999px; text-transform: uppercase; letter-spacing: .02em; }
+.job-pill.job-running { background: rgba(255, 183, 3, .15); color: #ffb703; }
+.job-pill.job-done { background: rgba(47, 214, 167, .15); color: var(--accent); }
+.job-pill.job-error { background: rgba(209, 73, 91, .15); color: var(--danger); }
+
 .chat-body { flex: 1; overflow-y: auto; padding: 22px 24px 10px; }
 
 /* empty state */
@@ -228,6 +247,12 @@ button { font-family: inherit; cursor: pointer; }
 .msg.assistant .bubble { padding: 2px 2px; }
 .msg .who-lbl { font-size: 11px; color: var(--text-dim); margin-bottom: 5px; display: flex; align-items: center; gap: 6px; }
 .msg .who-lbl .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.msg .who-lbl.err { color: var(--danger); }
+.msg .who-lbl.err .dot { background: var(--danger); }
+.bubble-error {
+  padding: 10px 14px; border-radius: 10px; background: rgba(209, 73, 91, .1);
+  border: 1px solid rgba(209, 73, 91, .35); color: var(--danger); font-size: 13.5px;
+}
 
 .tool-card {
   max-width: 78%; margin: 0 0 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -598,3 +623,4 @@ details.reasoning summary::-webkit-details-marker { display: none; }
 /* ---- multi-chain sequence display (3D tab strip + Seqs tab) ---- */
 .sp-body { display: flex; flex-direction: column; gap: 10px; }
 .sp-chain:last-child { margin-bottom: 0; }
+.sp-empty { font-size: 11.5px; color: var(--text-dim); padding: 4px; }
