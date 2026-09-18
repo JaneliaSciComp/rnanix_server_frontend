@@ -27,10 +27,10 @@
     return j;
   }
 
-  function saveSession(auth) {
+  function saveSession(auth, email) {
     sessionStorage.setItem(SESSION_KEY, JSON.stringify({
       idToken: auth.IdToken, accessToken: auth.AccessToken, refreshToken: auth.RefreshToken,
-      expiresAt: Date.now() + (auth.ExpiresIn || 3600) * 1000,
+      expiresAt: Date.now() + (auth.ExpiresIn || 3600) * 1000, email: email || '',
     }));
   }
 
@@ -52,7 +52,7 @@
       err.challenge = j.ChallengeName; err.session = j.Session;
       throw err;
     }
-    saveSession(j.AuthenticationResult);
+    saveSession(j.AuthenticationResult, email);
     return j.AuthenticationResult;
   }
 
@@ -61,7 +61,7 @@
       ChallengeName: 'NEW_PASSWORD_REQUIRED', ClientId: CLIENT_ID, Session: session,
       ChallengeResponses: { USERNAME: email, NEW_PASSWORD: newPassword },
     });
-    saveSession(j.AuthenticationResult);
+    saveSession(j.AuthenticationResult, email);
     return j.AuthenticationResult;
   }
 

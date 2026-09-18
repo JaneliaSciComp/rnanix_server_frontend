@@ -5,8 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RNAnix Copilot — v2 mockup</title>
 <link rel="stylesheet" href="style.css">
+<!-- Blocking (no defer/async) and BEFORE <body> on purpose: requireAuth() used to run as the
+     last script in the body, after the whole app shell (sidebar, viewer, etc.) had already
+     painted -- an unauthenticated visitor (or a fresh incognito tab, or right after logout) saw
+     a flash of the full UI before the redirect to login.html fired. Running it here means the
+     redirect happens before the browser paints any body content at all. -->
+<script src="auth.js"></script>
+<script>if (window.RNAnixAuth) RNAnixAuth.requireAuth();</script>
 </head>
 <body>
+
+<button class="bugreport-btn" id="bugReportBtn" title="Report a bug">!</button>
 
 <div class="shell">
 
@@ -28,11 +37,13 @@
     </div>
     <div class="hist-label">History</div>
     <div class="hist-list" id="histList"><!-- filled by app.js --></div>
+    <div class="hist-label">Examples</div>
+    <div class="hist-list" id="exampleList"><!-- filled by app.js --></div>
     <div class="sidebar-foot">
-      <div class="avatar">ZM</div>
+      <div class="avatar" id="userAvatar">?</div>
       <div class="who">
-        <div class="wn">Z. Marwan</div>
-        <div class="we">zouinkhim@janelia.hhmi.org</div>
+        <div class="wn" id="userName">Guest</div>
+        <div class="we" id="userEmail">demo mode — no login configured</div>
       </div>
       <a class="logout" href="login.html" id="logoutBtn">Log out</a>
     </div>
@@ -42,8 +53,25 @@
   <section class="chatcol">
     <div class="chat-head">
       <div class="cht" id="chatTitle">1EHZ tRNA · color by chain</div>
-      <span class="badge">Protenix v1.1</span>
-      <button class="adv-toggle" title="Manual form for power users — seeds, samples, MSA mode, Expert mode">Advanced form ⌄</button>
+      <select class="model-select" id="modelSelect" title="Backend model used for predictions">
+        <option value="">Protenix v1.1</option>
+      </select>
+      <button class="adv-toggle" id="advToggle" aria-expanded="false" aria-controls="advPanel"
+              title="Manual sampling controls for power users — seeds and samples per seed">Advanced form ⌄</button>
+    </div>
+    <!-- Sampling knobs applied to every prediction submitted from this page. min/max mirror
+         web_bridge.py's defaults_config.json (max_seeds / max_samples); the bridge re-clamps
+         server-side, so these bounds are an affordance, not the enforcement point. -->
+    <div class="adv-panel" id="advPanel" hidden>
+      <span class="adv-field">
+        <label class="adv-lbl" for="advSeeds">Seeds</label>
+        <input class="adv-num" id="advSeeds" type="number" min="1" max="5" step="1" value="3">
+      </span>
+      <span class="adv-field">
+        <label class="adv-lbl" for="advSamples">Samples / seed</label>
+        <input class="adv-num" id="advSamples" type="number" min="1" max="5" step="1" value="5">
+      </span>
+      <span class="adv-hint" id="advHint"><!-- filled by app.js --></span>
     </div>
     <div class="jobs-panel" id="jobsPanel" hidden><!-- filled by app.js --></div>
     <div class="chat-body" id="chatBody"><!-- filled by app.js --></div>
@@ -233,8 +261,6 @@
 </div>
 
 <input type="file" id="fileHidden" hidden accept=".txt,.csv,.fasta,.fa">
-<script src="auth.js"></script>
-<script>if (window.RNAnixAuth) RNAnixAuth.requireAuth();</script>
 <script src="app.js"></script>
 </body>
 </html>

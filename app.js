@@ -162,18 +162,116 @@
       var resiStr = line.slice(22, 26).trim();
       var resn = line.slice(17, 20).trim().toUpperCase();
       var x = parseFloat(line.slice(30, 38)), y = parseFloat(line.slice(38, 46)), z = parseFloat(line.slice(46, 54));
+      var bf = parseFloat(line.slice(60, 66));
       if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
       var key = chain + ':' + resiStr;
       if (!acc[key]) {
         var isNt = !!NT1[resn], isAa = !isNt && !!AA1[resn];
-        acc[key] = { code: NT1[resn] || AA1[resn] || 'N', kind: isNt ? 'nt' : (isAa ? 'aa' : 'x'), x: 0, y: 0, z: 0, n: 0 };
+        acc[key] = { code: NT1[resn] || AA1[resn] || 'N', kind: isNt ? 'nt' : (isAa ? 'aa' : 'x'), x: 0, y: 0, z: 0, n: 0, bf: 0, bn: 0 };
         if (!chains[chain]) { chains[chain] = []; order.push(chain); }
         chains[chain].push(key);
       }
       var a = acc[key]; a.x += x; a.y += y; a.z += z; a.n++;
+      if (isFinite(bf)) { a.bf += bf; a.bn++; }
     });
-    Object.keys(acc).forEach(function (k) { var a = acc[k]; a.x /= a.n; a.y /= a.n; a.z /= a.n; });
+    // bf ends up as this residue's mean per-atom B-factor -- for a prediction whose pipeline
+    // writes per-residue pLDDT into that column (confirmed for the reference-stack pipeline this
+    // deployment routes to), that mean IS the residue's pLDDT; for an experimental PDB entry it's
+    // the real crystallographic B-factor instead, a different physical quantity on the same
+    // 0-100-ish numeric scale -- see the isPrediction gate around the confidence-trim command below.
+    Object.keys(acc).forEach(function (k) { var a = acc[k]; a.x /= a.n; a.y /= a.n; a.z /= a.n; a.bf = a.bn ? a.bf / a.bn : null; });
     return { chains: chains, order: order, residues: acc };
+  }
+  // mmCIF equivalent of parseResidues -- REAL prediction results from this pipeline come back as
+  // mmCIF, not legacy PDB (confirmed against actual S3 output), so this is the common case, not
+  // an edge case: without it, get_structure_data/filter_residues_by_confidence silently had no
+  // confidence data to work with for almost every real prediction. mmCIF's _atom_site loop is
+  // whitespace-columnar with a declared header (not PDB's fixed byte-offsets), so column
+  // positions are read from that header rather than hardcoded, in case a different pipeline
+  // version orders them differently.
+  function parseCifResidues(text) {
+    var lines = text.split('\n'), headers = [], dataStart = -1;
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i].trim();
+      if (l.indexOf('_atom_site.') === 0) { headers.push(l.slice('_atom_site.'.length).trim()); continue; }
+      if (headers.length && l && l !== 'loop_') { dataStart = i; break; }
+    }
+    var need = ['group_PDB', 'auth_asym_id', 'auth_seq_id', 'auth_comp_id', 'B_iso_or_equiv', 'Cartn_x', 'Cartn_y', 'Cartn_z'];
+    var idx = {}; headers.forEach(function (h, i) { idx[h] = i; });
+    if (dataStart === -1 || need.some(function (k) { return !(k in idx); })) return null;
+    function tokenize(line) {
+      var out = [], m, re = /'[^']*'|"[^"]*"|\S+/g;
+      while ((m = re.exec(line))) out.push(m[0].replace(/^['"]|['"]$/g, ''));
+      return out;
+    }
+    var chains = {}, order = [], acc = {};
+    for (var j = dataStart; j < lines.length; j++) {
+      var raw = lines[j].trim();
+      if (!raw) continue;
+      if (raw[0] === '_' || raw === 'loop_' || raw === '#') break; // end of this loop's data rows
+      var t = tokenize(raw);
+      if (t.length <= idx.B_iso_or_equiv || (t[idx.group_PDB] !== 'ATOM' && t[idx.group_PDB] !== 'HETATM')) continue;
+      var chain = t[idx.auth_asym_id] || 'A', resiStr = t[idx.auth_seq_id], resn = (t[idx.auth_comp_id] || '').toUpperCase();
+      var x = parseFloat(t[idx.Cartn_x]), y = parseFloat(t[idx.Cartn_y]), z = parseFloat(t[idx.Cartn_z]), bf = parseFloat(t[idx.B_iso_or_equiv]);
+      if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
+      var key = chain + ':' + resiStr;
+      if (!acc[key]) {
+        var isNt = !!NT1[resn], isAa = !isNt && !!AA1[resn];
+        acc[key] = { code: NT1[resn] || AA1[resn] || 'N', kind: isNt ? 'nt' : (isAa ? 'aa' : 'x'), x: 0, y: 0, z: 0, n: 0, bf: 0, bn: 0 };
+        if (!chains[chain]) { chains[chain] = []; order.push(chain); }
+        chains[chain].push(key);
+      }
+      var a = acc[key]; a.x += x; a.y += y; a.z += z; a.n++;
+      if (isFinite(bf)) { a.bf += bf; a.bn++; }
+    }
+    if (!order.length) return null;
+    Object.keys(acc).forEach(function (k) { var a = acc[k]; a.x /= a.n; a.y /= a.n; a.z /= a.n; a.bf = a.bn ? a.bf / a.bn : null; });
+    return { chains: chains, order: order, residues: acc };
+  }
+  // Hides residues whose mean per-residue B-factor (pLDDT, for a prediction layer) falls below
+  // minConf -- separate from filterPdbText's polymer/ligand/water/ion component toggles, and
+  // applied on top of them in renderLayers.
+  function filterByConfidence(text, parsed, minConf) {
+    if (minConf == null || !parsed) return text;
+    return text.split('\n').filter(function (line) {
+      if (line.slice(0, 6) !== 'ATOM  ') return true;
+      var chain = line.slice(21, 22).trim() || 'A', resiStr = line.slice(22, 26).trim();
+      var res = parsed.residues[chain + ':' + resiStr];
+      return !res || res.bf == null || res.bf >= minConf;
+    }).join('\n');
+  }
+  // mmCIF equivalent of filterByConfidence -- same header-driven column lookup as parseCifResidues.
+  function filterCifByConfidence(text, parsed, minConf) {
+    if (minConf == null || !parsed) return text;
+    var lines = text.split('\n'), headers = [], dataStart = -1;
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i].trim();
+      if (l.indexOf('_atom_site.') === 0) { headers.push(l.slice('_atom_site.'.length).trim()); continue; }
+      if (headers.length && l && l !== 'loop_') { dataStart = i; break; }
+    }
+    var idx = {}; headers.forEach(function (h, i) { idx[h] = i; });
+    if (dataStart === -1 || !('group_PDB' in idx) || !('auth_asym_id' in idx) || !('auth_seq_id' in idx)) return text;
+    function tokenize(line) {
+      var out = [], m, re = /'[^']*'|"[^"]*"|\S+/g;
+      while ((m = re.exec(line))) out.push(m[0].replace(/^['"]|['"]$/g, ''));
+      return out;
+    }
+    var dataEnd = lines.length;
+    for (var j = dataStart; j < lines.length; j++) {
+      var raw = lines[j].trim();
+      if (raw && (raw[0] === '_' || raw === 'loop_' || raw === '#')) { dataEnd = j; break; }
+    }
+    var out = lines.slice(0, dataStart);
+    for (var k = dataStart; k < dataEnd; k++) {
+      var rawLine = lines[k], trimmed = rawLine.trim();
+      if (!trimmed) { out.push(rawLine); continue; }
+      var t = tokenize(trimmed);
+      if (t[idx.group_PDB] !== 'ATOM' && t[idx.group_PDB] !== 'HETATM') { out.push(rawLine); continue; }
+      var key = (t[idx.auth_asym_id] || 'A') + ':' + t[idx.auth_seq_id];
+      var res = parsed.residues[key];
+      if (!res || res.bf == null || res.bf >= minConf) out.push(rawLine);
+    }
+    return out.concat(lines.slice(dataEnd)).join('\n');
   }
   function tryFocusResidue(res) {
     try {
@@ -184,6 +282,7 @@
     } catch (e) { return false; }
   }
 
+  var confThreshold = null; // pLDDT/B-factor cutoff from a "trim below X%" chat command, or null
   var curStyle = 'Cartoon', curColor = 'Chain';
   function setStyleBtn(name) {
     curStyle = name;
@@ -215,7 +314,8 @@
       // Component (polymer/ligand/water/ion) filtering is PDB-fixed-column text surgery — it
       // does not apply to mmCIF results (e.g. a fresh prediction), which render unfiltered.
       var fmt = L.format === 'cif' ? 'mmcif' : 'pdb';
-      var text = L.format === 'cif' ? L.text : filterPdbText(L.text, compHide);
+      var minConf = L.isPrediction ? confThreshold : null;
+      var text = L.format === 'cif' ? filterCifByConfidence(L.text, L.parsed, minConf) : filterByConfidence(filterPdbText(L.text, compHide), L.parsed, minConf);
       try {
         if (opts) await v.loadStructureFromData(text, fmt, opts);
         else await v.loadStructureFromData(text, fmt);
@@ -316,10 +416,10 @@
     if (!L) { if (body) body.innerHTML = ''; return; }
     var parsed = L.parsed;
     if (!parsed) {
-      // mmCIF result (a fresh prediction): the sequence panel/SS tab only parse legacy PDB
-      // fixed-column text today, so this is an honest gap, not a silent failure.
+      // Both PDB (parseResidues) and mmCIF (parseCifResidues) are handled -- this is a genuine
+      // parse failure (e.g. an unrecognized mmCIF column layout), not just "it's mmCIF".
       curResidues = {}; curResKeys = []; curSeq = '';
-      if (body) body.innerHTML = '<div class="sp-empty">Sequence panel needs PDB-format text — this structure loaded as mmCIF.</div>';
+      if (body) body.innerHTML = '<div class="sp-empty">Could not parse this structure\'s residues.</div>';
       return;
     }
     curResidues = parsed.residues;
@@ -342,6 +442,7 @@
       layers = [{ id: 'L' + (nextLayerId++), pdbId: pdbId, label: label || pdbId, text: text, visible: true, parsed: parseResidues(text) }];
       syncPrimaryAliases();
       compHide = { polymer: false, ligand: false, water: false, ion: false };
+      confThreshold = null;
       syncCompUI();
       await renderLayers(themeChosen);
       buildSeqPanel();
@@ -929,10 +1030,19 @@
     "Run Expert-mode research on this riboswitch",
     "Export the current structure as a .zip",
   ];
-  // Real discussions (and their jobs) persist to localStorage (see saveThreads/loadThreads
-  // below) -- once anything real has been saved, it replaces this canned demo set entirely,
-  // same as v1's jobs panel starts empty rather than mixing sample data with real jobs.
-  var THREADS = loadThreads() || [
+  // THREADS_KEY must be assigned (not just declared) before loadThreads() runs on the next line
+  // -- `var` hoisting only hoists the declaration, not the assignment further down at its
+  // original definition site, so loadThreads() used to read localStorage["undefined"] on every
+  // page load (always missing real data, always falling back to the 3 canned demo threads below)
+  // even though saveThreads() correctly wrote to the real key afterwards, once THREADS_KEY had
+  // actually been assigned. That's why history "worked" for the rest of a session but always
+  // reset to the demo set on refresh.
+  var THREADS_KEY = 'rnanix_threads_v1';
+  // Illustrative mockup threads -- their own permanent "Examples" sidebar section (see
+  // renderExamples below), never mixed into THREADS/localStorage/backend sync. Clicking one just
+  // displays it (currentThread() won't find its id in THREADS, so typing a real message forks
+  // into a brand-new real thread instead of mutating this shared constant).
+  var EXAMPLE_THREADS = [
     {
       id: "t1", title: "1EHZ tRNA · color by chain", sub: "2 min ago", structure: "1EHZ — tRNA-Phe", pdb: "1EHZ",
       msgs: [
@@ -970,26 +1080,80 @@
       ],
     },
   ];
-  var curId = THREADS[0].id;
+  // Real discussions (and their jobs) persist to localStorage (see saveThreads/loadThreads
+  // below). A brand-new session with nothing saved yet starts on an actual "New chat" empty
+  // state -- EXAMPLE_THREADS above is where the illustrative mockup content lives now, in its
+  // own permanent sidebar section, not mixed into real history.
+  var THREADS = loadThreads() || [];
+  var curId = THREADS.length ? THREADS[0].id : null;
 
+  function deleteThread(id) {
+    var t = THREADS.filter(function (x) { return x.id === id; })[0];
+    if (!confirm('Delete "' + (t ? t.title : 'this discussion') + '"? This can\'t be undone.')) return;
+    THREADS = THREADS.filter(function (x) { return x.id !== id; });
+    if (curId === id) curId = THREADS.length ? THREADS[0].id : null;
+    render();
+  }
   function renderHistory() {
     $('histList').innerHTML = THREADS.map(function (t) {
       return '<div class="hist-item' + (t.id === curId ? ' active' : '') + '" data-id="' + t.id + '">' +
-        '<span class="ht">' + t.title + '</span><span class="hs">' + t.sub + '</span></div>';
+        '<button class="hist-del" data-id="' + t.id + '" title="Delete this discussion">&times;</button>' +
+        '<span class="ht">' + escapeHtml(t.title) + '</span><span class="hs">' + escapeHtml(t.sub) + '</span></div>';
     }).join('');
     $('histList').querySelectorAll('.hist-item').forEach(function (el) { el.onclick = function () { curId = el.dataset.id; render(); }; });
+    $('histList').querySelectorAll('.hist-del').forEach(function (btn) {
+      btn.onclick = function (e) { e.stopPropagation(); deleteThread(btn.dataset.id); };
+    });
+  }
+  function renderExamples() {
+    var el = $('exampleList'); if (!el) return;
+    el.innerHTML = EXAMPLE_THREADS.map(function (t) {
+      return '<div class="hist-item' + (t.id === curId ? ' active' : '') + '" data-id="' + t.id + '">' +
+        '<span class="ht">' + t.title + '</span><span class="hs">' + t.sub + '</span></div>';
+    }).join('');
+    el.querySelectorAll('.hist-item').forEach(function (item) { item.onclick = function () { curId = item.dataset.id; render(); }; });
+  }
+  // All chat text (user-typed, Claude's replies/thinking, and error/tool-result strings pulled
+  // from the backend) lands in innerHTML via render() below -- escape first, always, then layer
+  // a tiny markdown subset on top of the ALREADY-ESCAPED text so nothing user- or model-supplied
+  // can inject raw HTML through it.
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function mdInline(s) {
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    return s;
+  }
+  function mdToHtml(text) {
+    var blocks = String(text || '').split(/\n{2,}/);
+    return blocks.map(function (block) {
+      var lines = block.split('\n');
+      if (lines.length && lines.every(function (l) { return /^\s*[-*]\s+/.test(l) || !l.trim(); })) {
+        var items = lines.filter(function (l) { return l.trim(); })
+          .map(function (l) { return '<li>' + mdInline(escapeHtml(l.replace(/^\s*[-*]\s+/, ''))) + '</li>'; });
+        return '<ul>' + items.join('') + '</ul>';
+      }
+      return '<p>' + lines.map(function (l) { return mdInline(escapeHtml(l)); }).join('<br>') + '</p>';
+    }).join('');
   }
   function msgHtml(m) {
-    if (m.tool) return '<div class="tool-card"><div class="tc-call">' + ICON_WRENCH + ' <b>' + m.tool + '</b>(' + m.args + ')</div><div class="tc-ok"><span class="chk">✓</span> ' + m.result + '</div></div>';
-    if (m.role === 'user') return '<div class="msg user"><div class="bubble">' + m.text + '</div></div>';
-    if (m.error) return '<div class="msg assistant"><div class="who-lbl err"><span class="dot"></span> ' + ICON_WARNING + ' RNAnix</div><div class="bubble bubble-error">' + m.text + '</div></div>';
-    var think = m.thinking ? '<details class="reasoning"><summary>' + ICON_SPARKLE + ' Claude’s reasoning</summary><div class="reasoning-body">' + m.thinking + '</div></details>' : '';
-    var srcs = (m.sources && m.sources.length) ? '<div class="src-row">' + m.sources.map(function (s) { return '<a class="src-pill" href="' + s.url + '" target="_blank" rel="noopener">' + s.label + '</a>'; }).join('') + '</div>' : '';
-    return '<div class="msg assistant"><div class="who-lbl"><span class="dot"></span> RNAnix</div>' + think + '<div class="bubble">' + m.text + '</div>' + srcs + '</div>';
+    if (m.tool) return '<div class="tool-card"><div class="tc-call">' + ICON_WRENCH + ' <b>' + escapeHtml(m.tool) + '</b>(' + escapeHtml(m.args) + ')</div><div class="tc-ok"><span class="chk">✓</span> ' + escapeHtml(m.result) + '</div></div>';
+    if (m.role === 'user') return '<div class="msg user"><div class="bubble">' + escapeHtml(m.text).replace(/\n/g, '<br>') + '</div></div>';
+    if (m.pending) return '<div class="msg assistant"><div class="who-lbl"><span class="dot"></span> RNAnix</div><div class="bubble"><span class="typing-dots"><span></span><span></span><span></span></span></div></div>';
+    if (m.error) return '<div class="msg assistant"><div class="who-lbl err"><span class="dot"></span> ' + ICON_WARNING + ' RNAnix</div><div class="bubble bubble-error">' + escapeHtml(m.text) + '</div></div>';
+    var think = m.thinking ? '<details class="reasoning"><summary>' + ICON_SPARKLE + ' Claude’s reasoning</summary><div class="reasoning-body">' + mdToHtml(m.thinking) + '</div></details>' : '';
+    var srcs = (m.sources && m.sources.length) ? '<div class="src-row">' + m.sources.map(function (s) { return '<a class="src-pill" href="' + escapeHtml(s.url) + '" target="_blank" rel="noopener">' + escapeHtml(s.label) + '</a>'; }).join('') + '</div>' : '';
+    return '<div class="msg assistant"><div class="who-lbl"><span class="dot"></span> RNAnix</div>' + think + '<div class="bubble">' + mdToHtml(m.text) + '</div>' + srcs + '</div>';
   }
   function render() {
-    var t = THREADS.filter(function (x) { return x.id === curId; })[0];
+    var t = THREADS.filter(function (x) { return x.id === curId; })[0] ||
+      EXAMPLE_THREADS.filter(function (x) { return x.id === curId; })[0];
     renderHistory();
+    renderExamples();
     renderJobsPanel(t);
     if (!t) {
       $('chatTitle').textContent = 'New chat';
@@ -1013,7 +1177,6 @@
   $('newChatBtn').onclick = function () { curId = null; render(); };
 
   // ================= chat: real command parser for whatever you type =================
-  var PDB_RE = /\b([0-9][a-zA-Z0-9]{3})\b/;
   function currentThread() {
     var t = THREADS.filter(function (x) { return x.id === curId; })[0];
     if (!t) {
@@ -1029,19 +1192,76 @@
   }
 
   // ================= per-discussion job tracking + persistence =================
-  var THREADS_KEY = 'rnanix_threads_v1';
+  // (THREADS_KEY is assigned earlier, right before THREADS itself -- see the comment there.)
   function saveThreads() {
     try {
       localStorage.setItem(THREADS_KEY, JSON.stringify(THREADS.slice(0, 50)));
     } catch (e) { /* storage full/unavailable -- persistence is best-effort */ }
+    syncThreadsToBackend();
   }
+  // Real thread ids are always 'live-' + Date.now() (see currentThread()) -- these three are the
+  // only ids the canned demo set ever uses, so this check can never false-positive on real data.
+  var CANNED_DEMO_IDS = { t1: 1, t2: 1, t3: 1 };
   function loadThreads() {
     try {
       var raw = localStorage.getItem(THREADS_KEY);
       if (!raw) return null;
       var parsed = JSON.parse(raw);
-      return (Array.isArray(parsed) && parsed.length) ? parsed : null;
+      if (!Array.isArray(parsed) || !parsed.length) return null;
+      // One-time migration: before the "brand-new session defaults to an empty New chat, not the
+      // canned demo set" fix, THREADS was seeded with the 3 demo threads even with a real backend
+      // configured, and saveThreads() then persisted that into localStorage as if it were real
+      // history -- which kept reappearing on every load regardless of that fix. If everything
+      // saved here is still exactly those 3 canned ids, treat it as leftover demo data, not
+      // history, now that a real backend is configured.
+      if (API && parsed.every(function (t) { return CANNED_DEMO_IDS[t.id]; })) return null;
+      // A "pending" bubble persisted mid-request (reload/crash before the /chat response landed)
+      // would otherwise sit stuck forever -- nothing resumes it, unlike jobs' poll-on-load below.
+      parsed.forEach(function (t) { t.msgs = (t.msgs || []).filter(function (m) { return !m.pending; }); });
+      return parsed;
     } catch (e) { return null; }
+  }
+  // ---- backend-stored history (GET/PUT /discussions), so a discussion survives a browser/
+  // device switch instead of living only in localStorage. Gated on real Cognito auth being
+  // configured -- these two routes are the only ones behind a JWT authorizer (discussions.tf),
+  // not the shared WEB_TOKEN, so they need a real Authorization: Bearer <ID token> header. ----
+  function authHeader() {
+    var s = window.RNAnixAuth && RNAnixAuth.configured() && RNAnixAuth.getSession();
+    return (s && s.idToken) ? { 'Authorization': 'Bearer ' + s.idToken } : null;
+  }
+  var _discussionsSyncTimer = null;
+  function syncThreadsToBackend() {
+    if (!API) return;
+    var h = authHeader(); if (!h) return;
+    clearTimeout(_discussionsSyncTimer);
+    // Debounced: saveThreads() runs on nearly every render(), and a raw PUT per render would
+    // hammer DynamoDB during active status polling for no benefit -- only the latest snapshot
+    // within a short window actually matters.
+    _discussionsSyncTimer = setTimeout(function () {
+      h['content-type'] = 'application/json';
+      fetch(API + '/discussions', { method: 'PUT', headers: h, body: JSON.stringify({ threads: THREADS.slice(0, 50) }) })
+        .catch(function () { /* best-effort -- localStorage stays the source of truth on this device either way */ });
+    }, 2000);
+  }
+  // Called once at startup: the backend (if it has anything saved) is the cross-device source of
+  // truth and replaces whatever loadThreads() seeded from local storage/the canned demo set.
+  async function loadThreadsFromBackend() {
+    if (!API) return;
+    var h = authHeader(); if (!h) return;
+    try {
+      var j = await (await fetch(API + '/discussions', { headers: h })).json();
+      if (j && Array.isArray(j.threads) && j.threads.length) {
+        // Same "pending" cleanup loadThreads() already does for localStorage -- the debounced
+        // backend sync can fire mid-request (a "thinking" reply taking longer than the 2s
+        // debounce is the common case, not an edge case), persisting the pending bubble to the
+        // backend. Without this, restoring that snapshot on the NEXT load undoes the local fix
+        // and leaves "thinking" stuck forever, since nothing ever resumes an abandoned /chat call.
+        j.threads.forEach(function (t) { t.msgs = (t.msgs || []).filter(function (m) { return !m.pending; }); });
+        THREADS = j.threads;
+        if (!THREADS.some(function (t) { return t.id === curId; })) curId = THREADS[0].id;
+        render();
+      }
+    } catch (e) { /* best-effort -- this device's local/demo THREADS stays as-is */ }
   }
   function registerJob(t, jobId, meta) {
     t.jobs = t.jobs || [];
@@ -1096,30 +1316,86 @@
     } catch (e) { toast('Could not reopen job: ' + e.message); }
   }
   // ================= real predict/status wiring (rna-atlas-inference bridge) =================
-  var AVAILABLE_MODELS = null, DEFAULT_MODEL = 'default';
+  var AVAILABLE_MODELS = null, DEFAULT_MODEL = 'default', SELECTED_MODEL = 'default';
   async function loadAvailableModels() {
     if (!API) return;
     try {
       var r = await fetch(API + '/models' + (tok() ? '?t=' + encodeURIComponent(tok()) : ''));
       var j = await r.json();
       AVAILABLE_MODELS = j.models || j || [];
-      if (AVAILABLE_MODELS.length) DEFAULT_MODEL = AVAILABLE_MODELS[0].id || AVAILABLE_MODELS[0];
+      if (AVAILABLE_MODELS.length) {
+        DEFAULT_MODEL = AVAILABLE_MODELS[0].id || AVAILABLE_MODELS[0];
+        SELECTED_MODEL = DEFAULT_MODEL;
+        renderModelSelect();
+      }
     } catch (e) { /* /models is best-effort; DEFAULT_MODEL stays the fallback */ }
   }
-  // A plain pasted sequence in chat (no entity modal) — longest run of RNA letters, length >= 8.
-  function extractSequenceFromText(v) {
-    var m = v.toUpperCase().match(/[ACGU]{8,}/g);
-    if (!m) return null;
-    return m.reduce(function (a, b) { return b.length > a.length ? b : a; }, '');
+  function renderModelSelect() {
+    var sel = $('modelSelect'); if (!sel || !AVAILABLE_MODELS || !AVAILABLE_MODELS.length) return;
+    sel.innerHTML = AVAILABLE_MODELS.map(function (m) {
+      var id = m.id || m, label = m.label || m;
+      return '<option value="' + id + '"' + (id === SELECTED_MODEL ? ' selected' : '') + '>' + label + '</option>';
+    }).join('');
+    sel.onchange = function () { SELECTED_MODEL = sel.value; toast('New predictions will use "' + sel.value + '".'); };
   }
-  // Prefer whatever was built in the entity modal (Include sequence); it survives after
-  // "Insert into message" since modalEntities isn't cleared on insert. Otherwise fall back to a
-  // bare sequence typed straight into the chat message.
-  function buildPredictEntities(v) {
-    var used = modalEntities.filter(function (e) { return entCleanSeq(e.type, e.seq).length > 0; });
-    if (used.length) return used.map(function (e) { return { type: e.type, sequence: entCleanSeq(e.type, e.seq), count: entClampCount(e.count) }; });
-    var seq = extractSequenceFromText(v);
-    return seq ? [{ type: 'rna', sequence: seq, count: 1 }] : null;
+
+  // ---- Advanced form: per-request sampling knobs (N seeds x N samples/seed) ----
+  // These ride along in the /chat body next to `model` (see realChat) and web_bridge.py's _chat
+  // threads them into submit_prediction's _predict call as options.{seeds,samples}. They are NOT
+  // part of the tool schema Claude sees -- like the model dropdown, this is UI state applied to
+  // whatever the turn submits, not something Claude chooses.
+  //
+  // Bounds are hardcoded to match the backend's current defaults_config.json (max_seeds 5 /
+  // max_samples 5) rather than fetched: the bridge re-clamps every request server-side, so the
+  // worst case if the config is retuned is a stale affordance, never a rejected or silently
+  // altered job. Keep these in sync with that file if the caps change.
+  var ADV_DEFAULTS = { seeds: 3, samples: 5 };
+  var ADV_MAX = { seeds: 5, samples: 5 };
+  var ADV_KEY = 'rnanix_advanced_v1';
+  function advClamp(raw, key) {
+    var n = parseInt(raw, 10);
+    if (!isFinite(n) || n < 1) return ADV_DEFAULTS[key];
+    return Math.min(ADV_MAX[key], n);
+  }
+  // Single source for what gets SENT -- always re-read from the inputs rather than from a cached
+  // copy, so a value typed mid-discussion applies to the very next submission.
+  function advValues() {
+    return {
+      seeds: advClamp($('advSeeds') && $('advSeeds').value, 'seeds'),
+      samples: advClamp($('advSamples') && $('advSamples').value, 'samples')
+    };
+  }
+  function renderAdvHint(v) {
+    var el = $('advHint'); if (!el) return;
+    var total = v.seeds * v.samples;
+    el.textContent = v.seeds + ' seed' + (v.seeds === 1 ? '' : 's') + ' x ' + v.samples
+      + ' sample' + (v.samples === 1 ? '' : 's') + ' = ' + total + ' structure'
+      + (total === 1 ? '' : 's') + ' per prediction; the top 5 are kept.';
+  }
+  function initAdvancedForm() {
+    var btn = $('advToggle'), panel = $('advPanel'), seeds = $('advSeeds'), samples = $('advSamples');
+    if (!btn || !panel || !seeds || !samples) return;
+    try {
+      var saved = JSON.parse(localStorage.getItem(ADV_KEY) || 'null');
+      if (saved) { seeds.value = advClamp(saved.seeds, 'seeds'); samples.value = advClamp(saved.samples, 'samples'); }
+    } catch (e) { /* a corrupt entry just leaves the markup defaults in place */ }
+    btn.onclick = function () {
+      var open = panel.hidden;
+      panel.hidden = !open;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      btn.textContent = 'Advanced form ' + (open ? '⌃' : '⌄');
+    };
+    [seeds, samples].forEach(function (el) {
+      // 'change' (not 'input') so a half-typed value isn't clamped out from under the caret.
+      el.addEventListener('change', function () {
+        var v = advValues();
+        // Write the clamped number back so the field never shows a value we won't actually send.
+        seeds.value = v.seeds; samples.value = v.samples;
+        try { localStorage.setItem(ADV_KEY, JSON.stringify(v)); } catch (e) {}
+        renderAdvHint(v);
+      });
+    });
+    renderAdvHint(advValues());
   }
   async function fetchStageResult(stage) {
     if (stage.url) return (await fetch(stage.url + (stage.url.includes('?') ? '' : (tok() ? '?t=' + encodeURIComponent(tok()) : '')))).text();
@@ -1133,10 +1409,11 @@
   function addPredictionLayer(text, label) {
     var fmt = fmtOf(text);
     var L = { id: 'L' + (nextLayerId++), pdbId: label, label: label, text: text, format: fmt, visible: true,
-      parsed: fmt === 'pdb' ? parseResidues(text) : null };
+      parsed: fmt === 'pdb' ? parseResidues(text) : parseCifResidues(text), isPrediction: true };
     layers = [L]; // a prediction result replaces the primary structure, like loadStructure()
     syncPrimaryAliases();
     compHide = { polymer: false, ligand: false, water: false, ion: false };
+    confThreshold = null;
     syncCompUI();
     return renderLayers(themeChosen).then(function () { buildSeqPanel(); renderLayersMenu(); });
   }
@@ -1153,8 +1430,8 @@
   // card (a chat tool-card being live-updated) is optional -- resuming a poll for a job
   // restored from localStorage after a reload has no in-flight chat message to mutate, only
   // the jobs-panel entry (registerJob/updateJob), which always gets tracked either way.
-  async function pollPrediction(jobId, t, card) {
-    registerJob(t, jobId);
+  async function pollPrediction(jobId, t, card, model) {
+    registerJob(t, jobId, { model: model });
     for (var i = 0; i < 300; i++) {
       var j;
       try { j = await (await fetch(API + '/status?job=' + encodeURIComponent(jobId) + (tok() ? '&t=' + encodeURIComponent(tok()) : ''))).json(); }
@@ -1190,89 +1467,13 @@
     t.msgs.push({ role: 'assistant', text: 'This prediction is taking longer than expected — job ' + jobId + ' is still running on the backend.' });
     render();
   }
-  async function realPredict(v, t) {
-    if (!API) return simulatePrediction(t);
-    var entities = buildPredictEntities(v);
-    if (!entities) {
-      t.msgs.push({ role: 'assistant', text: 'I need an actual sequence to predict — paste one directly, or use "Include sequence" to build a multi-entity structure.' });
-      render(); return;
-    }
-    var expert = /expert|research/.test(v.toLowerCase());
-    var legacyRna = entities.filter(function (e) { return e.type === 'rna'; })[0];
-    var body = {
-      sequence: legacyRna ? legacyRna.sequence : '',
-      entities: entities,
-      name: '',
-      model: DEFAULT_MODEL,
-      options: { mode: 'protenix-mt', seeds: 3, samples: 5, relax: true, expert: expert, description: v.slice(0, 500), live_thinking: expert },
-      token: tok(),
-    };
-    var card = { tool: 'predict.submit', args: 'model="' + DEFAULT_MODEL + '"' + (expert ? ', expert=true' : ''), result: 'submitting…' };
-    t.msgs.push(card); render();
-    var jobId, j0;
-    try {
-      var r = await fetch(API + '/predict', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-      j0 = await r.json().catch(function () { return null; });
-      if (!r.ok && (!j0 || !j0.error)) throw new Error('HTTP ' + r.status);
-      if (j0 && j0.error) throw new Error(j0.error);
-      jobId = j0.job_id;
-      if (!jobId) throw new Error('no job_id in response');
-    } catch (e) {
-      card.result = 'submit failed: ' + e.message;
-      t.msgs.push({ role: 'assistant', error: true, text: extractErrorMessage(e.message) });
-      render(); return;
-    }
-    card.result = (String(j0.status || '').toUpperCase() === 'CACHED') ? 'cached — reusing a prior result' : 'queued · job_id ' + jobId;
-    render();
-    t.msgs.push({ tool: 'predict.status', args: 'poll', result: 'running…' });
-    render();
-    pollPrediction(jobId, t, t.msgs[t.msgs.length - 1]);
-  }
-  function simulatePrediction(t) {
-    var stages = [
-      ["predict.submit", 'model="daslab-ptnx1"', "Job queued"],
-      ["predict.status", "poll", "MSA build…"],
-      ["predict.status", "poll", "Predict & refine…"],
-    ];
-    var i = 0;
-    (function step() {
-      if (i < stages.length) { t.msgs.push({ tool: stages[i][0], args: stages[i][1], result: stages[i][2] }); render(); i++; setTimeout(step, 650); }
-      else {
-        t.msgs.push({ role: "assistant", text: "The staged progress above is real UI behavior — but the actual fold needs the live Protenix/SageMaker backend, which isn’t connected in this offline mockup. Try “fetch 1EHZ” instead to see a real structure load end-to-end." });
-        render();
-      }
-    })();
-  }
-  function handleLiveCommand(v, t) {
-    var lower = v.toLowerCase(), acted = false;
-    var m = v.match(PDB_RE);
-    if (/fetch|load|open|show|visuali[sz]e|display/.test(lower) && m) {
-      var id = m[1].toUpperCase();
-      t.msgs.push({ tool: "pymol_mcp.fetch", args: 'pdb_id="' + id + '"', result: "requesting " + id + " from RCSB…" });
-      render();
-      loadStructure(id, id).then(function (ok) {
-        t.msgs[t.msgs.length - 1].result = ok ? "Loaded — real structure, fetched live from RCSB" : "Could not load " + id + " (see viewer panel for the error)";
-        if (ok) { t.pdb = id; t.structure = id; if (/chain/.test(lower)) { setColorBtn('Chain'); themeChosen = true; renderLayers(true); } }
-        t.msgs.push({ role: "assistant", text: ok ? ("Loaded " + id + " — that's a live Mol* render of the real RCSB entry, not a canned image.") : ("I couldn't fetch " + id + " from RCSB — double check the ID, or your browser's network access.") });
-        render();
-      });
-      acted = true;
-    }
-    if (/remove water|hide water|strip water/.test(lower)) {
-      compHide.water = true; syncCompUI();
-      t.msgs.push({ tool: "pymol_mcp.remove", args: 'selection="solvent"', result: curPdbId ? "Waters hidden — structure re-rendered without HOH atoms" : "no structure loaded yet, load one first" });
-      if (curPdbId) renderLayers(themeChosen);
-      acted = true;
-    }
-    if (/surface/.test(lower) && curPdbText) { setStyleBtn('Surface'); themeChosen = true; renderLayers(true); t.msgs.push({ tool: "pymol_mcp.style", args: 'representation="surface"', result: "Style set to surface" }); acted = true; }
-    if (/cartoon/.test(lower) && curPdbText) { setStyleBtn('Cartoon'); themeChosen = true; renderLayers(true); t.msgs.push({ tool: "pymol_mcp.style", args: 'representation="cartoon"', result: "Style set to cartoon" }); acted = true; }
-    if (/rainbow/.test(lower) && curPdbText) { setColorBtn('Rainbow'); themeChosen = true; renderLayers(true); t.msgs.push({ tool: "pymol_mcp.color", args: 'scheme="rainbow"', result: "Applied" }); acted = true; }
-    else if (/color.*chain|by chain/.test(lower) && curPdbText) { setColorBtn('Chain'); themeChosen = true; renderLayers(true); t.msgs.push({ tool: "pymol_mcp.color", args: 'scheme="chain"', result: "Applied" }); acted = true; }
-    if (/zip|download|export/.test(lower)) { doDownload('zip'); t.msgs.push({ tool: "download.export", args: 'format="zip"', result: curPdbId ? "Bundled " + curPdbId + "_bundle.zip" : "nothing loaded yet" }); acted = true; }
-    if (/predict|fold this|structure for this (rna|sequence)/.test(lower)) { realPredict(v, t); acted = true; }
-    if (!acted) realChat(v, t);
-    render();
-  }
+  // Every regex-based keyword parser that used to live here (predict, fetch, remove water,
+  // style/color, download, confidence-trim) got removed one at a time, each after the same
+  // failure mode: a keyword guess acting on intent it couldn't actually verify (resubmitting
+  // stale sequences, misreading questions as commands, "remove the water stain from the report"
+  // triggering a real viewer action). Every one of those actions is now a real tool Claude can
+  // call with full conversation context -- see runClientTool and casp_web.py's _CHAT_TOOLS.
+  // send() below just hands every message straight to realChat().
   // ================= real chat wiring (Claude, via the same bridge Lambda) =================
   // Only plain user/assistant turns go to Claude -- tool-cards from the client-side command
   // parser above are real actions already reported to the user, not part of the conversation
@@ -1282,32 +1483,190 @@
     return t.msgs.filter(function (m) { return m.role === 'user' || m.role === 'assistant'; })
       .map(function (m) { return { role: m.role, content: m.text || '' }; });
   }
+  // ---- client tools: get_structure_data / filter_residues_by_confidence / reset_structure_
+  // filter need the live Mol* viewer state (parsed residues, B-factor/pLDDT), which only exists
+  // in the browser -- the backend can't run these in-process like submit_prediction, so it
+  // pauses and hands them back (see casp_web.py's _CLIENT_TOOL_NAMES / needs_client_tools).
+  var CLIENT_TOOL_LABELS = {
+    get_structure_data: 'viewer.get_structure_data',
+    filter_residues_by_confidence: 'viewer.filter_residues_by_confidence',
+    reset_structure_filter: 'viewer.reset_structure_filter',
+    fetch_structure: 'pymol_mcp.fetch',
+    set_viewer_style: 'pymol_mcp.style',
+    set_viewer_color: 'pymol_mcp.color',
+    toggle_component_visibility: 'pymol_mcp.remove',
+    download_structure: 'download.export',
+  };
+  async function runClientTool(name, input, t) {
+    var primary = layers[0];
+    if (name === 'fetch_structure') {
+      var id = String(input.pdb_id || '').toUpperCase().trim();
+      if (!id) return { ok: false, error: 'pdb_id is required.' };
+      var ok = await loadStructure(id, id);
+      if (!ok) return { ok: false, error: 'Could not fetch ' + id + ' from RCSB -- double check the ID.' };
+      if (t) { t.pdb = id; t.structure = id; }
+      return { ok: true, pdb_id: id };
+    }
+    if (name === 'set_viewer_style') {
+      if (!primary) return { ok: false, error: 'No structure loaded.' };
+      var styleMap = { cartoon: 'Cartoon', surface: 'Surface', 'ball-and-stick': 'Ball & stick' };
+      var style = styleMap[input.style];
+      if (!style) return { ok: false, error: 'Unknown style "' + input.style + '" -- use cartoon, surface, or ball-and-stick.' };
+      setStyleBtn(style); themeChosen = true; await renderLayers(true);
+      return { ok: true, style: input.style };
+    }
+    if (name === 'set_viewer_color') {
+      if (!primary) return { ok: false, error: 'No structure loaded.' };
+      var colorMap = { chain: 'Chain', rainbow: 'Rainbow', plddt: 'pLDDT', element: 'Element' };
+      var color = colorMap[input.scheme];
+      if (!color) return { ok: false, error: 'Unknown color scheme "' + input.scheme + '" -- use chain, rainbow, plddt, or element.' };
+      setColorBtn(color); themeChosen = true; await renderLayers(true);
+      return { ok: true, scheme: input.scheme };
+    }
+    if (name === 'toggle_component_visibility') {
+      if (!primary) return { ok: false, error: 'No structure loaded.' };
+      var comp = String(input.component || '').toLowerCase();
+      if (!(comp in compHide)) return { ok: false, error: 'Unknown component "' + input.component + '" -- use polymer, ligand, water, or ion.' };
+      compHide[comp] = !input.visible;
+      syncCompUI();
+      await renderLayers(themeChosen);
+      return { ok: true, component: comp, visible: !!input.visible };
+    }
+    if (name === 'download_structure') {
+      if (!primary) return { ok: false, error: 'No structure loaded.' };
+      var fmt = ['zip', 'pdb', 'cif', 'png', 'dbn'].indexOf(input.format) !== -1 ? input.format : 'zip';
+      await doDownload(fmt);
+      return { ok: true, format: fmt };
+    }
+    if (name === 'get_structure_data') {
+      if (!primary) return { loaded: false };
+      var parsed = primary.parsed;
+      if (!parsed) {
+        return { loaded: true, format: primary.format || 'pdb', is_prediction: !!primary.isPrediction,
+          note: 'Sequence/confidence data only parses PDB-format text; this structure loaded as mmCIF.' };
+      }
+      var seq = '', chains = [];
+      parsed.order.forEach(function (ch) {
+        var keys = parsed.chains[ch];
+        var kind = keys.length && parsed.residues[keys[0]].kind === 'aa' ? 'aa' : 'nt';
+        chains.push({ chain: ch, length: keys.length, kind: kind });
+        seq += keys.map(function (k) { return parsed.residues[k].code; }).join('');
+      });
+      var bfs = Object.keys(parsed.residues).map(function (k) { return parsed.residues[k].bf; }).filter(function (v) { return v != null; });
+      var confidence = { available: bfs.length > 0 };
+      if (bfs.length) {
+        confidence.kind = primary.isPrediction ? 'pLDDT' : 'B-factor (experimental structure -- NOT a confidence score, do not treat it as pLDDT)';
+        confidence.mean = +(bfs.reduce(function (a, b) { return a + b; }, 0) / bfs.length).toFixed(1);
+        confidence.min = +Math.min.apply(null, bfs).toFixed(1);
+        confidence.max = +Math.max.apply(null, bfs).toFixed(1);
+        if (primary.isPrediction) {
+          var low = Object.keys(parsed.residues).filter(function (k) { var bf = parsed.residues[k].bf; return bf != null && bf < 70; });
+          confidence.residues_below_70_count = low.length;
+          confidence.residues_below_70 = low.slice(0, 200);
+          if (low.length > 200) confidence.residues_below_70_truncated = true;
+        }
+      }
+      return { loaded: true, format: primary.format || 'pdb', is_prediction: !!primary.isPrediction,
+        chains: chains, sequence: seq, length: seq.length, confidence: confidence,
+        active_filter_min_confidence: confThreshold };
+    }
+    if (name === 'filter_residues_by_confidence') {
+      if (!primary) return { ok: false, error: 'No structure loaded.' };
+      if (!primary.isPrediction) return { ok: false, error: 'Not a prediction -- no real pLDDT to filter on (call get_structure_data to confirm).' };
+      if (!primary.parsed) return { ok: false, error: 'No parsed per-residue data available (mmCIF result).' };
+      var minConf = Number(input.min_confidence);
+      if (!isFinite(minConf)) return { ok: false, error: 'min_confidence must be a number.' };
+      confThreshold = minConf;
+      var trimmed = Object.keys(primary.parsed.residues).filter(function (k) { var bf = primary.parsed.residues[k].bf; return bf != null && bf < minConf; }).length;
+      renderLayers(themeChosen).then(buildSeqPanel);
+      return { ok: true, min_confidence: minConf, trimmed_residue_count: trimmed };
+    }
+    if (name === 'reset_structure_filter') {
+      confThreshold = null;
+      renderLayers(themeChosen).then(buildSeqPanel);
+      return { ok: true };
+    }
+    return { error: 'unknown client tool ' + name };
+  }
   async function realChat(v, t) {
     if (!API) {
-      t.msgs.push({ role: 'assistant', text: '(mockup chat) Try phrases like “fetch 1EHZ”, “color by chain”, “remove water”, “show surface”, “export as zip”, or “predict a structure for this sequence” — those run real client-side actions against the viewer.' });
+      t.msgs.push({ role: 'assistant', text: '(demo mode — no backend configured) Every action here, including simple ones like fetching a PDB entry, now goes through Claude via the real chat backend, so there\'s nothing this offline mockup can do on its own. Set window.INFER_API to a real deployment to try it for real.' });
       render(); return;
     }
-    var messages = buildChatMessages(t);
-    var j;
-    try {
-      var r = await fetch(API + '/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages: messages, token: tok() }) });
-      // The bridge always answers with a JSON body, even on a 4xx/5xx (e.g. {"error": "..."}) --
-      // parse it before deciding the request failed, so a real backend error message reaches the
-      // chat instead of being collapsed into a bare "HTTP 502".
-      j = await r.json().catch(function () { return null; });
-      if (!r.ok && (!j || !j.error)) throw new Error('HTTP ' + r.status);
-    } catch (e) {
-      t.msgs.push({ role: 'assistant', error: true, text: 'Could not reach the chat backend (' + e.message + ').' });
-      render(); return;
+    // API Gateway + Lambda proxy buffers the whole /chat response -- there's no way to stream
+    // Claude's real thinking tokens down live, so this "pending" bubble (animated dots, see
+    // msgHtml/typing-dots) is what actually shows while the request is in flight. It's swapped
+    // out for the real reply (with its real thinking, once threaded through below) the moment
+    // the response lands.
+    var pending = { role: 'assistant', pending: true };
+    t.msgs.push(pending); render();
+    var body = { messages: buildChatMessages(t), model: SELECTED_MODEL, options: advValues(), token: tok() };
+    var j, allToolCalls = [], allThinking = [];
+    // Bounded round-trip loop: each POST either finishes (a reply) or pauses on a client tool
+    // (get_structure_data etc.) that only the browser can execute -- see casp_web.py's _chat().
+    for (var round = 0; round < 6; round++) {
+      try {
+        var r = await fetch(API + '/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        // The bridge always answers with a JSON body, even on a 4xx/5xx (e.g. {"error": "..."}) --
+        // parse it before deciding the request failed, so a real backend error message reaches
+        // the chat instead of being collapsed into a bare "HTTP 502".
+        j = await r.json().catch(function () { return null; });
+        if (!r.ok && (!j || !j.error)) throw new Error('HTTP ' + r.status);
+      } catch (e) {
+        var idxErr = t.msgs.indexOf(pending);
+        if (idxErr !== -1) t.msgs.splice(idxErr, 1);
+        t.msgs.push({ role: 'assistant', error: true, text: 'Could not reach the chat backend (' + e.message + ').' });
+        render(); return;
+      }
+      if (j.thinking) allThinking.push(j.thinking);
+      if (j.tool_calls && j.tool_calls.length) allToolCalls = allToolCalls.concat(j.tool_calls);
+      if (j.error || !j.needs_client_tools || !j.needs_client_tools.length) break;
+      var idxPending = t.msgs.indexOf(pending);
+      var clientResults = [];
+      // Sequential (not Promise.all) so tool-cards land in the order Claude requested them, and
+      // so an earlier action (e.g. fetch_structure) is actually done before a later one that
+      // depends on it (e.g. set_viewer_color) runs against the right structure.
+      for (var ci = 0; ci < j.needs_client_tools.length; ci++) {
+        var call = j.needs_client_tools[ci];
+        var result = await runClientTool(call.name, call.input || {}, t);
+        var errored = result && result.error;
+        t.msgs.splice(idxPending, 0, { tool: CLIENT_TOOL_LABELS[call.name] || call.name,
+          args: JSON.stringify(call.input || {}), result: errored ? ('error: ' + extractErrorMessage(result.error)) : 'ok' });
+        idxPending++;
+        clientResults.push({ type: 'tool_result', tool_use_id: call.id, content: JSON.stringify(result) });
+      }
+      render();
+      // options re-sent on every round: _chat threads them per-request, so a turn that resumes
+      // after a client tool must carry them again or its submit_prediction reverts to defaults.
+      body = { convo: j.convo, extra_tool_results: (j.resolved_tool_results || []).concat(clientResults), model: SELECTED_MODEL, options: advValues(), token: tok() };
     }
-    (j.tool_calls || []).forEach(function (c) {
+    var idxDone = t.msgs.indexOf(pending);
+    if (idxDone !== -1) t.msgs.splice(idxDone, 1);
+    allToolCalls.forEach(function (c) {
       var errored = c.result && c.result.error;
       t.msgs.push({ tool: c.name, args: JSON.stringify(c.input || {}), result: errored ? ('error: ' + extractErrorMessage(c.result.error)) : 'ok' });
-      if (c.name === 'submit_prediction' && c.result && c.result.job_id && !errored) pollPrediction(c.result.job_id, t, t.msgs[t.msgs.length - 1]);
+      if (c.name === 'submit_prediction' && c.result && c.result.job_id && !errored) pollPrediction(c.result.job_id, t, t.msgs[t.msgs.length - 1], c.result.model);
     });
     if (j.error) t.msgs.push({ role: 'assistant', error: true, text: extractErrorMessage(j.error) });
-    else t.msgs.push({ role: 'assistant', text: j.reply || '(no reply)' });
+    else if (j.needs_client_tools && j.needs_client_tools.length) t.msgs.push({ role: 'assistant', error: true, text: 'Stopped after several tool round-trips -- ask me to continue.' });
+    else t.msgs.push({ role: 'assistant', text: j.reply || '(no reply)', thinking: allThinking.join('\n\n---\n\n') || null });
     render();
+  }
+  // Auto-names a fresh discussion from its first message, same idea as ChatGPT-style history
+  // titling -- real Claude call (POST /title), not a local heuristic. _titlingInFlight is a
+  // plain in-memory guard (not persisted) so a reload mid-request can't get stuck thinking a
+  // title request is still running.
+  var _titlingInFlight = {};
+  function maybeTitleThread(t) {
+    if (!API || t.title !== 'New chat' || _titlingInFlight[t.id]) return;
+    var firstUser = t.msgs.filter(function (m) { return m.role === 'user'; })[0];
+    if (!firstUser || !firstUser.text) return;
+    _titlingInFlight[t.id] = true;
+    fetch(API + '/title', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: firstUser.text, token: tok() }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (j && j.title) { t.title = j.title; render(); } })
+      .catch(function () { /* best-effort -- thread just keeps its "New chat" title */ })
+      .then(function () { delete _titlingInFlight[t.id]; });
   }
   function send() {
     var v = $('msgInput').value.trim(); if (!v) return;
@@ -1315,15 +1674,53 @@
     t.msgs.push({ role: 'user', text: v });
     $('msgInput').value = ''; $('msgInput').style.height = 'auto';
     render();
-    handleLiveCommand(v, t);
+    maybeTitleThread(t);
+    realChat(v, t);
   }
   $('sendBtn').onclick = send;
   $('msgInput').addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
   $('msgInput').addEventListener('input', function () { this.style.height = 'auto'; this.style.height = Math.min(140, this.scrollHeight) + 'px'; });
 
+  // ================= sidebar identity =================
+  // index.html ships generic "Guest" placeholders (a real user's email used to be hardcoded
+  // there -- every visitor saw the same real person's identity, logged in or not). Populate the
+  // real thing from the actual Cognito session; leave the generic placeholders alone in
+  // unconfigured/demo mode.
+  (function () {
+    var s = window.RNAnixAuth && RNAnixAuth.configured() && RNAnixAuth.getSession();
+    var email = s && s.email;
+    if (!email) return;
+    var local = email.split('@')[0];
+    if ($('userName')) $('userName').textContent = local;
+    if ($('userEmail')) $('userEmail').textContent = email;
+    if ($('userAvatar')) $('userAvatar').textContent = local.slice(0, 2).toUpperCase();
+  })();
+
   // ================= sidebar collapse + viewer drag-to-resize =================
   if ($('logoutBtn')) $('logoutBtn').onclick = function (e) { if (window.RNAnixAuth && RNAnixAuth.configured()) { e.preventDefault(); RNAnixAuth.logout(); } };
   $('sidebarToggle').onclick = function () { $('sidebar').classList.toggle('collapsed'); };
+
+  // ================= bug report =================
+  // No backend to send this to yet -- a mailto: with useful debug context prefilled is a real,
+  // zero-infrastructure way to get a report in, rather than a button that does nothing until a
+  // proper feedback pipeline exists.
+  var BUG_REPORT_EMAIL = 'zouinkhim@janelia.hhmi.org';
+  if ($('bugReportBtn')) {
+    $('bugReportBtn').onclick = function () {
+      var t = THREADS.filter(function (x) { return x.id === curId; })[0];
+      var body = [
+        'Describe what happened and what you expected instead:',
+        '',
+        '',
+        '--- debug context (leave this in) ---',
+        'Page: ' + location.href,
+        'Model selected: ' + SELECTED_MODEL,
+        'Discussion: ' + (t ? (t.title + ' (' + t.id + ')') : '(none open)'),
+        'Browser: ' + navigator.userAgent,
+      ].join('\n');
+      location.href = 'mailto:' + BUG_REPORT_EMAIL + '?subject=' + encodeURIComponent('RNAnix bug report') + '&body=' + encodeURIComponent(body);
+    };
+  }
   (function () {
     var handle = $('resizeHandle'), viewer = document.querySelector('.viewer');
     if (!handle || !viewer) return;
@@ -1353,15 +1750,21 @@
   renderTemplates();
   renderInfo();
   render();
+  initAdvancedForm();
   loadAvailableModels();
   // Resume polling for any job that was still running when the page last closed/reloaded --
   // otherwise a restored "running" badge would just sit there stale forever, since nothing else
-  // re-checks it.
-  if (API) {
+  // re-checks it. Deferred until after loadThreadsFromBackend() settles (success, failure, or
+  // no-op) so this walks the FINAL THREADS -- backend's cross-device copy if one loaded,
+  // otherwise whatever localStorage/the canned demo set already provided -- instead of racing it
+  // and possibly polling against thread objects backend is about to replace.
+  function resumeJobPolling() {
+    if (!API) return;
     THREADS.forEach(function (t) {
       (t.jobs || []).forEach(function (j) {
         if (j.state === 'submitted' || j.state === 'running') pollPrediction(j.job_id, t);
       });
     });
   }
+  loadThreadsFromBackend().then(resumeJobPolling);
 })();

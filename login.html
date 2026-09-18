@@ -26,7 +26,7 @@
       <p class="auth-title">Welcome back</p>
       <p class="auth-sub">Sign in with the account your lab admin set up for you.</p>
       <form id="loginForm">
-        <div class="field"><label>Email</label><input type="email" id="login-email" placeholder="you@lab.edu" value="zouinkhim@janelia.hhmi.org"></div>
+        <div class="field"><label>Email</label><input type="email" id="login-email" placeholder="you@lab.edu"></div>
         <div class="field"><label>Password</label><input type="password" id="login-pw" placeholder="••••••••"></div>
         <p class="auth-error" id="login-error" hidden></p>
         <div class="auth-forgot"><a href="#">Forgot password?</a></div>
@@ -41,7 +41,7 @@
       <p class="auth-sub">Set a password to activate your RNAnix account.</p>
       <div class="invite-note" id="invite-note"><b>Your lab admin</b> invited you to RNAnix. Log in with the temporary password from your invite email first — this pane activates once Cognito asks for a new one.</div>
       <form id="inviteForm">
-        <div class="field"><label>Email</label><input type="email" id="invite-email" value="zouinkhim@janelia.hhmi.org"></div>
+        <div class="field"><label>Email</label><input type="email" id="invite-email"></div>
         <div class="field">
           <label>New password</label>
           <input type="password" id="pw" placeholder="Create a password" oninput="checkStrength()">
@@ -82,6 +82,18 @@ function checkStrength() {
 // pendingInviteSession carries a NEW_PASSWORD_REQUIRED challenge's Session token from the login
 // pane to the invite pane — Cognito needs it back in RespondToAuthChallenge.
 var pendingInviteSession = null;
+
+// The invite email's "Accept your invitation" link is /login.html?email=<address> (Cognito's
+// {username} placeholder, see terraform/cognito.tf) -- pre-fill it so an invitee never has to
+// copy their own email out of the email body onto a blank form, and jump straight into the
+// password field since the temp password is the only thing left to type.
+(function () {
+  var email = new URLSearchParams(location.search).get('email');
+  if (!email) return;
+  document.getElementById('login-email').value = email;
+  document.getElementById('invite-email').value = email;
+  document.getElementById('login-pw').focus();
+})();
 
 document.getElementById('loginForm').addEventListener('submit', async function (e) {
   e.preventDefault();
