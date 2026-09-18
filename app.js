@@ -1140,6 +1140,19 @@
       return '<p>' + lines.map(function (l) { return mdInline(escapeHtml(l)); }).join('<br>') + '</p>';
     }).join('');
   }
+  // Updates one tool-card's live result text in place, without touching any other node in
+  // chatBody -- unlike render()'s full innerHTML replace, this can't wipe an active text
+  // selection elsewhere in the transcript. Used by pollPrediction's every-3-seconds "still
+  // running" tick, which used to call render() on every iteration for no structural reason
+  // (no message is added or removed, just one status string changes).
+  function updateCardResult(t, card) {
+    if (curId !== t.id) return;
+    var i = t.msgs.indexOf(card);
+    if (i === -1) return;
+    var node = $('chatBody').children[i];
+    var ok = node && node.querySelector('.tc-ok');
+    if (ok) ok.innerHTML = '<span class="chk">✓</span> ' + escapeHtml(card.result);
+  }
   function msgHtml(m) {
     if (m.tool) return '<div class="tool-card"><div class="tc-call">' + ICON_WRENCH + ' <b>' + escapeHtml(m.tool) + '</b>(' + escapeHtml(m.args) + ')</div><div class="tc-ok"><span class="chk">✓</span> ' + escapeHtml(m.result) + '</div></div>';
     if (m.role === 'user') return '<div class="msg user"><div class="bubble">' + escapeHtml(m.text).replace(/\n/g, '<br>') + '</div></div>';
@@ -1447,7 +1460,9 @@
         render(); return;
       }
       updateJob(t, jobId, { state: 'running' });
-      render();
+      renderJobsPanel(t);
+      if (card) updateCardResult(t, card);
+      saveThreads();
       var stage = (m.msa && (m.msa.url || m.msa.cif)) ? m.msa : ((m.nomsa && (m.nomsa.url || m.nomsa.cif)) ? m.nomsa : null);
       if (stage) {
         var text;
