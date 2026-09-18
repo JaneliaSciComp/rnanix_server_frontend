@@ -1301,19 +1301,22 @@
       row.onclick = function () { reopenJob(t, row.dataset.job); };
     });
   }
-  // Re-displays an already-finished job's structure without re-submitting anything.
+  // Re-displays an already-finished job's structure without re-submitting anything. Returns a
+  // {ok, ...} result (in addition to the toast, kept for the plain click-to-reopen UI path) so
+  // callers like runClientTool's load_prediction_result can report success/failure properly.
   async function reopenJob(t, jobId) {
-    if (!API) return;
+    if (!API) return { ok: false, error: 'Not connected to the inference API.' };
     try {
       var j = await (await fetch(API + '/status?job=' + encodeURIComponent(jobId) + (tok() ? '&t=' + encodeURIComponent(tok()) : ''))).json();
       var m = mapPredictStatus(j);
       var stage = (m.msa && (m.msa.url || m.msa.cif)) ? m.msa : ((m.nomsa && (m.nomsa.url || m.nomsa.cif)) ? m.nomsa : null);
-      if (!stage) { toast('No stored result for this job anymore.'); return; }
+      if (!stage) { toast('No stored result for this job anymore.'); return { ok: false, error: 'No stored result for this job anymore.' }; }
       var text = await fetchStageResult(stage);
       await addPredictionLayer(text, jobId + ' (reopened)');
       t.structure = jobId + ' (reopened)'; t.pdb = null;
       render();
-    } catch (e) { toast('Could not reopen job: ' + e.message); }
+      return { ok: true, job_id: jobId };
+    } catch (e) { toast('Could not reopen job: ' + e.message); return { ok: false, error: 'Could not reopen job: ' + e.message }; }
   }
   // ================= real predict/status wiring (rna-atlas-inference bridge) =================
   var AVAILABLE_MODELS = null, DEFAULT_MODEL = 'default', SELECTED_MODEL = 'default';
@@ -1492,6 +1495,7 @@
     filter_residues_by_confidence: 'viewer.filter_residues_by_confidence',
     reset_structure_filter: 'viewer.reset_structure_filter',
     fetch_structure: 'pymol_mcp.fetch',
+    load_prediction_result: 'pymol_mcp.load_prediction',
     set_viewer_style: 'pymol_mcp.style',
     set_viewer_color: 'pymol_mcp.color',
     toggle_component_visibility: 'pymol_mcp.remove',
@@ -1506,6 +1510,11 @@
       if (!ok) return { ok: false, error: 'Could not fetch ' + id + ' from RCSB -- double check the ID.' };
       if (t) { t.pdb = id; t.structure = id; }
       return { ok: true, pdb_id: id };
+    }
+    if (name === 'load_prediction_result') {
+      var jid = String(input.job_id || '').trim();
+      if (!jid) return { ok: false, error: 'job_id is required.' };
+      return await reopenJob(t, jid);
     }
     if (name === 'set_viewer_style') {
       if (!primary) return { ok: false, error: 'No structure loaded.' };
