@@ -1702,7 +1702,20 @@
     realChat(v, t);
   }
   $('sendBtn').onclick = send;
-  $('msgInput').addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+  $('msgInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); return; }
+    // Up-arrow-to-edit-last-message, same as claude.ai -- only when the box is empty, so it
+    // never fights normal cursor movement while composing a multi-line message.
+    if (e.key === 'ArrowUp' && !this.value) {
+      var t = THREADS.filter(function (x) { return x.id === curId; })[0];
+      var last = t && t.msgs.filter(function (m) { return m.role === 'user'; }).pop();
+      if (!last) return;
+      e.preventDefault();
+      this.value = last.text;
+      this.style.height = 'auto'; this.style.height = Math.min(140, this.scrollHeight) + 'px';
+      this.setSelectionRange(this.value.length, this.value.length);
+    }
+  });
   $('msgInput').addEventListener('input', function () { this.style.height = 'auto'; this.style.height = Math.min(140, this.scrollHeight) + 'px'; });
 
   // ================= sidebar identity =================
