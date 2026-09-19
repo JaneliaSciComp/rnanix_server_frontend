@@ -345,6 +345,18 @@
     $('themeBtn').innerHTML = viewerLight ? ICON_SUN : ICON_MOON;
     applyCanvasBackground();
   };
+  // Mol*'s built-in "uncertainty" theme is a generic crystallographic-B-factor/RMSF display
+  // ("Uncertainty/Disorder") -- its own default color-list + domain, verified empirically against
+  // a real pipeline prediction (real pLDDT 50-96, mean 92 -- genuinely high confidence) with a
+  // headless-browser screenshot, renders it almost entirely RED. That's an inverted/mismatched
+  // scale for pLDDT (where HIGH = good and should read blue, AlphaFold convention), not missing
+  // or bad data. Mol* does ship a dedicated "plddt-confidence" theme, but it requires
+  // ma_quality_assessment/ModelArchive mmCIF annotations this pipeline's plain PDB/CIF output
+  // doesn't carry, so it's not a safe drop-in. Forcing an explicit domain + color list on the
+  // SAME "uncertainty" theme (still reads the real B-factor column) is what actually fixed it,
+  // reverified the same way: same real job, correctly renders almost entirely blue with visible
+  // dips exactly at the structure's genuine lower-confidence residues.
+  var PLDDT_COLOR_PARAMS = { domain: [0, 100], list: { kind: 'interpolate', colors: [[0xff0000, 0], [0xffffff, 0.5], [0x0000ff, 1]] } };
   function applyThemeBestEffort() {
     // Best-effort real Mol* theming via its plugin state manager. Wrapped defensively: if this
     // vendored build's manager API shape differs, this silently no-ops rather than breaking the
@@ -357,7 +369,10 @@
       var comps = mgr && mgr.hierarchy && mgr.hierarchy.selection && mgr.hierarchy.selection.structures &&
         mgr.hierarchy.selection.structures[0] && mgr.hierarchy.selection.structures[0].components;
       if (comps && mgr.component && mgr.component.updateRepresentationsTheme) {
-        mgr.component.updateRepresentationsTheme(comps, { color: colorMap[color] || 'chain-id' });
+        var themeName = colorMap[color] || 'chain-id';
+        var params = { color: themeName };
+        if (color === 'pLDDT') params.colorParams = PLDDT_COLOR_PARAMS;
+        mgr.component.updateRepresentationsTheme(comps, params);
       }
     } catch (e) { /* cosmetic only */ }
   }
