@@ -4,17 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RNAnix — Connect from Claude</title>
-<link rel="stylesheet" href="../style.css">
+<!-- ../inference/, not ../ -- v2/claude-mcp/ and v2/inference/ are siblings once deployed,
+     even though this repo's root IS inference/'s content (see deploy script). -->
+<link rel="stylesheet" href="../inference/style.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body class="mcp-page">
 
 <header class="mcp-header">
-  <a class="brand" href="../index.html">
+  <a class="brand" href="../inference/index.html">
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M7 3c0 4 10 6 10 12M17 3c0 4-10 6-10 12" stroke="#2fd6a7" stroke-width="1.8" stroke-linecap="round"/><circle cx="7" cy="3" r="1.6" fill="#2fd6a7"/><circle cx="17" cy="21" r="1.6" fill="#2fd6a7"/><circle cx="17" cy="3" r="1.6" fill="#e8edf2"/><circle cx="7" cy="21" r="1.6" fill="#e8edf2"/></svg>
     <span class="brand-word">RNA<b>nix</b></span>
   </a>
-  <a class="mcp-back" href="../index.html">&larr; Back to the app</a>
+  <a class="mcp-back" href="../inference/index.html">&larr; Back to the app</a>
 </header>
 
 <main class="mcp-main">
@@ -88,11 +90,26 @@
   document.querySelectorAll(".copy-btn").forEach(function (btn) {
     btn.addEventListener("click", function () {
       var target = document.getElementById(btn.dataset.copyTarget);
-      navigator.clipboard.writeText(target.textContent).then(function () {
+      var flash = function (label) {
         var was = btn.textContent;
-        btn.textContent = "Copied";
+        btn.textContent = label;
         setTimeout(function () { btn.textContent = was; }, 1200);
-      });
+      };
+      var fallback = function () {
+        var range = document.createRange();
+        range.selectNodeContents(target);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        flash("Select + Ctrl/Cmd-C");
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(target.textContent).then(function () {
+          flash("Copied");
+        }, fallback);
+      } else {
+        fallback();
+      }
     });
   });
 })();
