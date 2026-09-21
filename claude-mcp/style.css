@@ -1,0 +1,76 @@
+/* Layout for the standalone "connect from Claude" instructions page. Reuses ../style.css only
+   for :root variables, the body background grid, and .brand -- everything else here is new. */
+
+.mcp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.mcp-header .brand { text-decoration: none; color: var(--text); }
+.mcp-back { color: var(--text-muted); text-decoration: none; font-size: 14px; }
+.mcp-back:hover { color: var(--text); }
+
+.mcp-main {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 40px 24px 80px;
+}
+.mcp-main h1 { font-size: 28px; margin: 0 0 12px; }
+.mcp-lede { color: var(--text-muted); font-size: 16px; line-height: 1.55; margin: 0 0 24px; }
+
+.mcp-callout {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 32px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.mcp-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px 22px;
+  margin-bottom: 20px;
+}
+.mcp-card h2 { font-size: 17px; margin: 0 0 10px; }
+.mcp-card p { color: var(--text-muted); font-size: 14px; line-height: 1.5; }
+.mcp-card ul, .mcp-steps { padding-left: 20px; font-size: 14px; line-height: 1.6; }
+.mcp-steps li { margin-bottom: 10px; }
+.mcp-note { font-size: 13px; color: var(--text-dim); border-top: 1px solid var(--border-soft); padding-top: 12px; margin-top: 14px; }
+
+.code-block {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+.code-block code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.copy-btn {
+  flex: none;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.copy-btn:hover { border-color: var(--accent-dim); color: var(--accent); }
+
+.mcp-footnote { color: var(--text-dim); font-size: 13px; line-height: 1.5; margin-top: 28px; }

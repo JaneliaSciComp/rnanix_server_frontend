@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RNAnix — Connect from Claude</title>
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="mcp-page">
+
+<header class="mcp-header">
+  <a class="brand" href="../index.html">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M7 3c0 4 10 6 10 12M17 3c0 4-10 6-10 12" stroke="#2fd6a7" stroke-width="1.8" stroke-linecap="round"/><circle cx="7" cy="3" r="1.6" fill="#2fd6a7"/><circle cx="17" cy="21" r="1.6" fill="#2fd6a7"/><circle cx="17" cy="3" r="1.6" fill="#e8edf2"/><circle cx="7" cy="21" r="1.6" fill="#e8edf2"/></svg>
+    <span class="brand-word">RNA<b>nix</b></span>
+  </a>
+  <a class="mcp-back" href="../index.html">&larr; Back to the app</a>
+</header>
+
+<main class="mcp-main">
+  <h1>Run RNAnix from Claude</h1>
+  <p class="mcp-lede">
+    RNAnix exposes a remote MCP (Model Context Protocol) server, so you can fold an RNA/protein
+    complex directly from a Claude conversation instead of the web app — Claude submits the job
+    and reads the result back through the same backend this site uses.
+  </p>
+
+  <div class="mcp-callout">
+    <strong>You need an invite first.</strong> This connector uses the same invite-only sign-in as
+    the website — if you don't already have RNAnix credentials, ask whoever administers this site
+    to invite your email before continuing.
+  </div>
+
+  <section class="mcp-card">
+    <h2>Option A — Claude Code (CLI)</h2>
+    <p>Add the server, then run <code>claude</code> and log in when your browser opens:</p>
+    <div class="code-block">
+      <code id="cliCmd">claude mcp add --transport http rnanix &lt;mcp-url&gt;</code>
+      <button class="copy-btn" data-copy-target="cliCmd">Copy</button>
+    </div>
+  </section>
+
+  <section class="mcp-card">
+    <h2>Option B — claude.ai / Claude Desktop</h2>
+    <ol class="mcp-steps">
+      <li>Open <strong>Customize &rarr; Connectors</strong> (Team/Enterprise: an owner adds this once under
+        <strong>Organization Settings &rarr; Connectors</strong> before members can connect individually).</li>
+      <li>Click <strong>+ Add custom connector</strong>.</li>
+      <li>Name it <code>RNAnix</code> and paste this URL:
+        <div class="code-block">
+          <code id="mcpUrl">not live yet — check back soon</code>
+          <button class="copy-btn" data-copy-target="mcpUrl">Copy</button>
+        </div>
+      </li>
+      <li>Click <strong>Add</strong>, then sign in with your RNAnix invite when Claude opens the login page.</li>
+    </ol>
+  </section>
+
+  <section class="mcp-card">
+    <h2>What it can do today</h2>
+    <ul>
+      <li>Fold complexes of RNA, protein, DNA, and ligand chains together, from raw sequences.</li>
+      <li>Pick how many seeds / samples to run.</li>
+      <li>Returns the top-ranked structure as raw PDB/mmCIF text once the fold finishes.</li>
+    </ul>
+    <p class="mcp-note">
+      Not in this first version: MSA and template selection. Every MCP fold runs single-sequence,
+      template-free, on RNAnix's default model — the same options the chat app's "Expert mode"
+      exposes aren't available here yet.
+    </p>
+  </section>
+
+  <p class="mcp-footnote">
+    Custom connectors run from Anthropic's cloud, not your device — so this only requires your
+    RNAnix login, nothing installed locally. Free Claude accounts can add one custom connector;
+    Pro/Max/Team/Enterprise have no such limit.
+  </p>
+</main>
+
+<script>
+(function () {
+  var url = window.MCP_URL || "";
+  if (url) {
+    document.getElementById("mcpUrl").textContent = url;
+    document.getElementById("cliCmd").textContent =
+      "claude mcp add --transport http rnanix " + url;
+  }
+  document.querySelectorAll(".copy-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var target = document.getElementById(btn.dataset.copyTarget);
+      navigator.clipboard.writeText(target.textContent).then(function () {
+        var was = btn.textContent;
+        btn.textContent = "Copied";
+        setTimeout(function () { btn.textContent = was; }, 1200);
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>
