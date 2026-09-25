@@ -296,6 +296,62 @@
   document.querySelectorAll('#colorGroup .seg-btn').forEach(function (b) { b.onclick = function () { setColorBtn(b.dataset.color); themeChosen = true; if (curPdbText) renderLayers(true); }; });
   var STYLE_MAP = { 'Cartoon': 'cartoon', 'Surface': 'molecular-surface', 'Ball & stick': 'ball-and-stick' };
   var COLOR_MAP = { Chain: 'chain-id', Rainbow: 'polymer-index', pLDDT: 'uncertainty', Element: 'element-symbol' };
+  // Rank scrubber: layers[0].ranks (set by addPredictionLayer when /status handed back more than
+  // one finalize_inference.py pick) is the full ordered list of per-rank structure texts;
+  // rankIndex is which one layers[0].text currently shows. Only meaningful for the primary
+  // (prediction) layer -- overlay layers from "Add to 3D" never carry .ranks.
+  function renderRankScrubber() {
+    var el = $('rankScrubber'); if (!el) return;
+    var L = layers[0];
+    if (!L || !L.ranks || L.ranks.length <= 1) { el.hidden = true; return; }
+    el.hidden = false;
+    $('rankLabel').textContent = 'Rank ' + (L.rankIndex + 1) + ' of ' + L.ranks.length;
+    var overlaid = layers.length > 1;
+    var btn = $('rankOverlayBtn');
+    btn.textContent = overlaid ? 'Show 1 only' : 'Overlay all';
+    btn.classList.toggle('active', overlaid);
+    // Scrubbing the primary layer while other ranks are already overlaid would swap which rank
+    // the primary shows out from under an already-visible "Rank N" overlay layer of the same rank
+    // -- hide prev/next rather than let that duplicate/orphan a layer; the Layers panel already
+    // covers per-rank show/hide/remove once everything's overlaid.
+    $('rankPrevBtn').hidden = overlaid;
+    $('rankNextBtn').hidden = overlaid;
+  }
+  // Co-renders every rank in the SAME Mol* scene as independent layers -- reuses the exact
+  // layers/renderLayers machinery "Add to 3D" (Templates) already uses, so it's the same kind of
+  // unaligned co-render, not a real structural superposition: each rank is an independent sample
+  // from the model, with no guarantee it shares the primary's position/orientation. Toggling back
+  // drops every layer except the one currently shown by the scrubber.
+  function toggleRankOverlay() {
+    var primary = layers[0];
+    if (!primary || !primary.ranks || primary.ranks.length <= 1) return;
+    if (layers.length > 1) {
+      layers = [primary];
+    } else {
+      primary.ranks.forEach(function (text, i) {
+        if (i === primary.rankIndex) return; // already showing as the primary layer
+        var fmt = primary.format;
+        layers.push({ id: 'L' + (nextLayerId++), pdbId: primary.pdbId, label: 'Rank ' + (i + 1), text: text,
+          format: fmt, visible: true, parsed: fmt === 'pdb' ? parseResidues(text) : parseCifResidues(text),
+          isPrediction: true });
+      });
+    }
+    renderLayers(themeChosen).then(function () { buildSeqPanel(); renderLayersMenu(); });
+  }
+  $('rankOverlayBtn').onclick = toggleRankOverlay;
+  function setRank(delta) {
+    var L = layers[0];
+    if (!L || !L.ranks || L.ranks.length <= 1 || layers.length > 1) return;
+    var n = L.ranks.length;
+    L.rankIndex = (L.rankIndex + delta + n) % n;
+    L.text = L.ranks[L.rankIndex];
+    L.parsed = L.format === 'cif' ? parseCifResidues(L.text) : parseResidues(L.text);
+    confThreshold = null;
+    renderRankScrubber();
+    renderLayers(themeChosen).then(function () { buildSeqPanel(); });
+  }
+  $('rankPrevBtn').onclick = function () { setRank(-1); };
+  $('rankNextBtn').onclick = function () { setRank(1); };
   // Renders EVERY visible layer into one shared Mol* scene: plugin.clear() once, then
   // loadStructureFromData once per visible layer without clearing in between — this is the
   // exact pattern the production /inference page already uses (inference.js's
@@ -533,6 +589,7 @@
     renderLayersMenu();
   }
   function renderLayersMenu() {
+    renderRankScrubber();
     var wrap = $('dispLayers'); if (!wrap) return;
     wrap.innerHTML = layers.length ? layers.map(function (L, i) {
       return '<div class="disp-row">' +
@@ -1377,7 +1434,7 @@
       var stage = (m.msa && (m.msa.url || m.msa.cif)) ? m.msa : ((m.nomsa && (m.nomsa.url || m.nomsa.cif)) ? m.nomsa : null);
       if (!stage) { toast('No stored result for this job anymore.'); return { ok: false, error: 'No stored result for this job anymore.' }; }
       var text = await fetchStageResult(stage);
-      await addPredictionLayer(text, jobId + ' (reopened)');
+      await addPredictionLayer(text, jobId + ' (reopened)', stage.ranks);
       t.structure = jobId + ' (reopened)'; t.pdb = null;
       render();
       return { ok: true, job_id: jobId };
@@ -1474,10 +1531,11 @@
     var hasResult = nm.url || nm.cif || ms.url || ms.cif;
     return { state: j.state || 'unknown', error: j.error, nomsa: nm, msa: ms, done: j.state === 'done' || !!hasResult };
   }
-  function addPredictionLayer(text, label) {
+  function addPredictionLayer(text, label, ranks) {
     var fmt = fmtOf(text);
     var L = { id: 'L' + (nextLayerId++), pdbId: label, label: label, text: text, format: fmt, visible: true,
-      parsed: fmt === 'pdb' ? parseResidues(text) : parseCifResidues(text), isPrediction: true };
+      parsed: fmt === 'pdb' ? parseResidues(text) : parseCifResidues(text), isPrediction: true,
+      ranks: (ranks && ranks.length > 1) ? ranks : null, rankIndex: 0 };
     layers = [L]; // a prediction result replaces the primary structure, like loadStructure()
     syncPrimaryAliases();
     compHide = { polymer: false, ligand: false, water: false, ion: false };
@@ -1521,7 +1579,7 @@
         try { text = await fetchStageResult(stage); }
         catch (e) { t.msgs.push({ role: 'assistant', error: true, text: 'Got a result but could not fetch the structure text: ' + e.message }); render(); return; }
         var jobName = (t.title !== 'New chat' && t.title) || jobId;
-        await addPredictionLayer(text, jobName + ' (prediction)');
+        await addPredictionLayer(text, jobName + ' (prediction)', stage.ranks);
         t.pdb = null; t.structure = jobName + ' (prediction)';
         if (card) card.result = 'done — structure loaded in the viewer';
         updateJob(t, jobId, { state: 'done' });
