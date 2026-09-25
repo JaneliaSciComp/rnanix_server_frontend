@@ -64,6 +64,10 @@
   // ================= real Mol* viewer =================
   var mstar = null, molstarLoading = null;
   var curPdbId = null, curPdbText = null, curSeq = "";
+  // Which prediction job's result is currently shown as the primary layer -- the job-side
+  // counterpart to curPdbId, so render() can tell whether switching to a prediction-result
+  // thread actually needs to reopen its job (see render()'s t.lastJobId branch).
+  var curJobId = null;
   var compHide = { polymer: false, ligand: false, water: false, ion: false };
   // Multiple structures can now be co-rendered ("Add to 3D" from Templates) as independent
   // layers in the SAME Mol* scene — layers[0] is always the "primary" structure (the one chat
@@ -86,6 +90,7 @@
   var ICON_SPARKLE = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-1px"><path d="M12 2l1.8 5.2L19 9l-5.2 1.8L12 16l-1.8-5.2L5 9l5.2-1.8z"/></svg>';
   var ICON_EXTLINK = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M7 17L17 7"/><path d="M8 7h9v9"/></svg>';
   var ICON_WARNING = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M10.3 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+  var ICON_PIN = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 3h6l1 6 3 3v2H5v-2l3-3z"/></svg>';
   // Backend errors often arrive as "<context>: <raw JSON from the upstream API>" (e.g. Claude's
   // {"error":{"message":"..."}}) -- pull out just the human message instead of showing the raw
   // blob verbatim in a chat bubble.
@@ -537,7 +542,11 @@
     $('viewerName').textContent = label || pdbId;
     try {
       var text = await fetchPdbText(pdbId);
-      layers = [{ id: 'L' + (nextLayerId++), pdbId: pdbId, label: label || pdbId, text: text, visible: true, parsed: parseResidues(text) }];
+      var newLayer = { id: 'L' + (nextLayerId++), pdbId: pdbId, label: label || pdbId, text: text, visible: true, parsed: parseResidues(text), pinned: false };
+      // Pinned layers (see toggleLayerPinned) survive a fresh load instead of being wiped by it --
+      // the whole point of pinning is to compare a structure against whatever gets loaded next,
+      // including from a different discussion. Unpinned ones are dropped, same as before.
+      layers = [newLayer].concat(layers.filter(function (l) { return l.pinned; }));
       syncPrimaryAliases();
       compHide = { polymer: false, ligand: false, water: false, ion: false };
       confThreshold = null;
@@ -560,7 +569,7 @@
     setViewerMsg('Adding ' + pdbId + '…');
     try {
       var text = await fetchPdbText(pdbId);
-      layers.push({ id: 'L' + (nextLayerId++), pdbId: pdbId, label: label || pdbId, text: text, visible: true, parsed: parseResidues(text) });
+      layers.push({ id: 'L' + (nextLayerId++), pdbId: pdbId, label: label || pdbId, text: text, visible: true, parsed: parseResidues(text), pinned: false });
       await renderLayers(themeChosen);
       renderLayersMenu();
       $('displayMenu').hidden = false;
@@ -588,6 +597,16 @@
     renderLayers(themeChosen);
     renderLayersMenu();
   }
+  // A pinned layer survives loadStructure()/addPredictionLayer() replacing the rest of `layers`
+  // (see their .pinned filters) and survives switching to "New chat" (see render()'s `!t`
+  // branch) -- the point is comparing a structure against whatever gets loaded next, including
+  // from a completely different discussion, without it getting silently cleared out from under
+  // you. Pinning doesn't protect against explicit removal via the layer's own remove button.
+  function toggleLayerPinned(id) {
+    var L = layers.filter(function (l) { return l.id === id; })[0]; if (!L) return;
+    L.pinned = !L.pinned;
+    renderLayersMenu();
+  }
   function renderLayersMenu() {
     renderRankScrubber();
     var wrap = $('dispLayers'); if (!wrap) return;
@@ -596,10 +615,14 @@
         '<span class="disp-dot" style="background:' + LAYER_COLORS[i % LAYER_COLORS.length] + '"></span>' +
         '<span class="disp-name" title="' + L.label + '">' + L.label + '</span>' +
         '<button class="disp-eye" data-act="vis" data-layer="' + L.id + '">' + (L.visible ? ICON_EYE_ON : ICON_EYE_OFF) + '</button>' +
+        '<button class="disp-pin' + (L.pinned ? ' active' : '') + '" data-act="pin" data-layer="' + L.id + '" title="' +
+          (L.pinned ? 'Pinned -- stays loaded when you switch discussions' : 'Pin -- keep this structure when you load another one, including from a different discussion') +
+          '">' + ICON_PIN + '</button>' +
         (layers.length > 1 ? '<button class="disp-x" data-act="rm" data-layer="' + L.id + '" title="remove layer">&times;</button>' : '') +
         '</div>';
     }).join('') : '<div class="disp-empty">No structures loaded</div>';
     wrap.querySelectorAll('[data-act="vis"]').forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); toggleLayerVisible(b.dataset.layer); }; });
+    wrap.querySelectorAll('[data-act="pin"]').forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); toggleLayerPinned(b.dataset.layer); }; });
     wrap.querySelectorAll('[data-act="rm"]').forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); removeLayer(b.dataset.layer); }; });
   }
   document.querySelectorAll('.comp-row .eye').forEach(function (btn) {
@@ -1269,9 +1292,18 @@
     renderJobsPanel(t);
     if (!t) {
       $('chatTitle').textContent = 'New chat';
-      $('viewerName').textContent = 'No structure loaded';
-      if (curPdbId) { curPdbId = null; curPdbText = null; try { mstar && mstar.plugin.clear(); } catch (e) {} }
-      setViewerMsg('No structure loaded — try a chat message like “fetch 1EHZ”.');
+      // Pinned layers (see toggleLayerPinned) survive going to "New chat" too -- pinning means
+      // "don't clear this on me", and a blank New chat clearing it anyway would defeat the point.
+      var pinnedOnly = layers.filter(function (l) { return l.pinned; });
+      if (pinnedOnly.length) {
+        layers = pinnedOnly;
+        syncPrimaryAliases();
+        renderLayers(themeChosen).then(function () { buildSeqPanel(); renderLayersMenu(); });
+      } else {
+        $('viewerName').textContent = 'No structure loaded';
+        if (curPdbId) { curPdbId = null; curPdbText = null; try { mstar && mstar.plugin.clear(); } catch (e) {} }
+        setViewerMsg('No structure loaded — try a chat message like “fetch 1EHZ”.');
+      }
       $('chatBody').innerHTML = '<div class="empty"><h1>What are we working on?</h1>' +
         '<p>Ask in plain language — fetches, styling, and structure edits run for real, client-side, against live RCSB data.</p>' +
         '<div class="cards">' + EXAMPLE_CARDS.map(function (c) { return '<div class="card" data-fill="' + c.replace(/"/g, '&quot;') + '">' + c + '</div>'; }).join('') + '</div></div>';
@@ -1283,6 +1315,12 @@
     $('chatBody').innerHTML = t.msgs.map(msgHtml).join('');
     $('chatBody').scrollTop = $('chatBody').scrollHeight;
     if (t.pdb && curPdbId !== t.pdb) loadStructure(t.pdb, t.structure);
+    // A prediction-result thread has no t.pdb (see pollPrediction/reopenJob), so switching back to
+    // one used to show nothing new at all -- t.lastJobId + curJobId (set alongside t.pdb/curPdbId
+    // in those two places) closes that gap the same way t.pdb/curPdbId already does for fetches.
+    // curJobId is set to the attempted job id BEFORE reopenJob's fetch (not after success), so a
+    // job whose result has expired doesn't get silently re-attempted on every single render().
+    else if (t.lastJobId && curJobId !== t.lastJobId) { curJobId = t.lastJobId; reopenJob(t, t.lastJobId); }
     else if (t.structure) $('viewerName').textContent = t.structure;
     saveThreads();
   }
@@ -1435,7 +1473,7 @@
       if (!stage) { toast('No stored result for this job anymore.'); return { ok: false, error: 'No stored result for this job anymore.' }; }
       var text = await fetchStageResult(stage);
       await addPredictionLayer(text, jobId + ' (reopened)', stage.ranks);
-      t.structure = jobId + ' (reopened)'; t.pdb = null;
+      t.structure = jobId + ' (reopened)'; t.pdb = null; t.lastJobId = jobId; curJobId = jobId;
       render();
       return { ok: true, job_id: jobId };
     } catch (e) { toast('Could not reopen job: ' + e.message); return { ok: false, error: 'Could not reopen job: ' + e.message }; }
@@ -1535,8 +1573,10 @@
     var fmt = fmtOf(text);
     var L = { id: 'L' + (nextLayerId++), pdbId: label, label: label, text: text, format: fmt, visible: true,
       parsed: fmt === 'pdb' ? parseResidues(text) : parseCifResidues(text), isPrediction: true,
-      ranks: (ranks && ranks.length > 1) ? ranks : null, rankIndex: 0 };
-    layers = [L]; // a prediction result replaces the primary structure, like loadStructure()
+      ranks: (ranks && ranks.length > 1) ? ranks : null, rankIndex: 0, pinned: false };
+    // A prediction result replaces the primary structure, like loadStructure() -- except any
+    // pinned layer (see toggleLayerPinned), which survives instead of getting wiped by it.
+    layers = [L].concat(layers.filter(function (l) { return l.pinned; }));
     syncPrimaryAliases();
     compHide = { polymer: false, ligand: false, water: false, ion: false };
     confThreshold = null;
@@ -1580,7 +1620,7 @@
         catch (e) { t.msgs.push({ role: 'assistant', error: true, text: 'Got a result but could not fetch the structure text: ' + e.message }); render(); return; }
         var jobName = (t.title !== 'New chat' && t.title) || jobId;
         await addPredictionLayer(text, jobName + ' (prediction)', stage.ranks);
-        t.pdb = null; t.structure = jobName + ' (prediction)';
+        t.pdb = null; t.structure = jobName + ' (prediction)'; t.lastJobId = jobId; curJobId = jobId;
         if (card) card.result = 'done — structure loaded in the viewer';
         updateJob(t, jobId, { state: 'done' });
         t.msgs.push({ role: 'assistant', text: 'Done — that\'s a real predicted structure from the AWS pipeline, loaded in the viewer on the right (job ' + jobId + ').' });
