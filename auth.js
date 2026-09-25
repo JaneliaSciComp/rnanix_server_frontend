@@ -13,6 +13,12 @@
   var CLIENT_ID = window.COGNITO_CLIENT_ID || '';
   var ENDPOINT = REGION ? ('https://cognito-idp.' + REGION + '.amazonaws.com/') : '';
   var SESSION_KEY = 'rnanix_session';
+  // localStorage, not sessionStorage: sessionStorage is scoped to one browsing-context/tab, so a
+  // session saved in tab A is invisible to a brand-new tab B on the same origin -- requireAuth()
+  // in B sees no session at all and bounces to login.html, even seconds after logging in in A.
+  // localStorage is shared across tabs of the same origin (and survives closing/reopening the
+  // browser), so a session persists until the refresh token itself actually expires (~30 days).
+  var storage = window.localStorage;
 
   function configured() { return !!(REGION && CLIENT_ID); }
 
@@ -31,7 +37,7 @@
   // original stays valid, ~30 days by default), so refreshSession() must pass the existing one
   // through explicitly here or it would get silently wiped on every renewal.
   function saveSession(auth, email, refreshToken) {
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+    storage.setItem(SESSION_KEY, JSON.stringify({
       idToken: auth.IdToken, accessToken: auth.AccessToken,
       refreshToken: auth.RefreshToken || refreshToken,
       expiresAt: Date.now() + (auth.ExpiresIn || 3600) * 1000, email: email || '',
@@ -39,10 +45,10 @@
   }
 
   function getSession() {
-    try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null'); } catch (e) { return null; }
+    try { return JSON.parse(storage.getItem(SESSION_KEY) || 'null'); } catch (e) { return null; }
   }
 
-  function clearSession() { sessionStorage.removeItem(SESSION_KEY); }
+  function clearSession() { storage.removeItem(SESSION_KEY); }
 
   // The ID/access token dies after ~1 hour (Cognito default); the refresh token that was sitting
   // in the session unused until now is normally good for ~30 days. Silently trades the former for

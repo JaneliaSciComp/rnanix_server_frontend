@@ -324,7 +324,7 @@
         catch (e2) { setViewerMsg('Could not render ' + L.label + ' (' + e2.message + ').'); }
       }
     }
-    if (keepTheme) applyThemeBestEffort(); // secondary, independent attempt at recoloring specifically
+    if (keepTheme) { applyThemeBestEffort(); applyStyleBestEffort(); } // secondary, independent attempts at recoloring/restyling
     applyCanvasBackground();
   }
   // Light/dark background for the viewer canvas itself (not the page chrome) — uses Mol*'s
@@ -373,6 +373,33 @@
         var params = { color: themeName };
         if (color === 'pLDDT') params.colorParams = PLDDT_COLOR_PARAMS;
         mgr.component.updateRepresentationsTheme(comps, params);
+      }
+    } catch (e) { /* cosmetic only */ }
+  }
+  // Cartoon/Surface/Ball & stick never actually took effect: this vendored Mol* build's
+  // loadStructureFromData(data, format, opts) silently drops opts.representationParams (only
+  // opts.dataLabel is ever read -- confirmed by reading the bundled source) and always calls
+  // applyPreset(tree, "default"), so every layer always rendered with the default cartoon preset
+  // no matter what curStyle said. The Style buttons still visually toggled (setStyleBtn just
+  // flips a CSS class), which is why clicking looked like it "did nothing" rather than erroring.
+  // Same fix shape as applyThemeBestEffort just above: updateRepresentations (not the Theme
+  // variant) swaps the type.name param of the already-built representation post-hoc, on the real
+  // structure-component manager, instead of relying on the load-time option that gets ignored.
+  // Its update() REPLACES the transform's params wholesale rather than deep-merging (confirmed
+  // empirically: passing only {type:{name:...}} silently no-ops, never changing the rendered
+  // style) -- so the new type name has to be spliced into a copy of the representation's full
+  // current params, not passed on its own.
+  function applyStyleBestEffort() {
+    try {
+      if (!mstar || !mstar.plugin || !mstar.plugin.managers) return;
+      var mgr = mstar.plugin.managers.structure;
+      var comps = mgr && mgr.hierarchy && mgr.hierarchy.selection && mgr.hierarchy.selection.structures &&
+        mgr.hierarchy.selection.structures[0] && mgr.hierarchy.selection.structures[0].components;
+      var firstRepr = comps && comps[0] && comps[0].representations && comps[0].representations[0];
+      if (comps && firstRepr && mgr.component && mgr.component.updateRepresentations) {
+        var oldParams = firstRepr.cell.transform.params;
+        var newParams = Object.assign({}, oldParams, { type: Object.assign({}, oldParams.type, { name: STYLE_MAP[curStyle] || 'cartoon' }) });
+        mgr.component.updateRepresentations(comps, firstRepr, newParams);
       }
     } catch (e) { /* cosmetic only */ }
   }
@@ -1258,9 +1285,18 @@
     return (s && s.idToken) ? { 'Authorization': 'Bearer ' + s.idToken } : null;
   }
   var _discussionsSyncTimer = null;
+  // True from page load until loadThreadsFromBackend()'s GET settles. Blocks the PUT below during
+  // that window -- otherwise the very first render()'s saveThreads() (using whatever localStorage
+  // seeded THREADS with, possibly just []) schedules a 2s-debounced PUT that fires unconditionally
+  // if the GET happens to take longer than 2s (cold Lambda) or fails outright, silently clobbering
+  // this user's real cross-device history in DynamoDB with an empty/stale local snapshot. Once the
+  // GET settles, the render() it triggers calls saveThreads() again with the now-correct THREADS,
+  // so nothing here needs to manually flush a sync afterward.
+  var _backendHydrating = false;
   function syncThreadsToBackend() {
     if (!API) return;
     var h = authHeader(); if (!h) return;
+    if (_backendHydrating) return;
     clearTimeout(_discussionsSyncTimer);
     // Debounced: saveThreads() runs on nearly every render(), and a raw PUT per render would
     // hammer DynamoDB during active status polling for no benefit -- only the latest snapshot
@@ -1274,8 +1310,8 @@
   // Called once at startup: the backend (if it has anything saved) is the cross-device source of
   // truth and replaces whatever loadThreads() seeded from local storage/the canned demo set.
   async function loadThreadsFromBackend() {
-    if (!API) return;
-    var h = authHeader(); if (!h) return;
+    if (!API) { _backendHydrating = false; return; }
+    var h = authHeader(); if (!h) { _backendHydrating = false; return; }
     try {
       var j = await (await fetch(API + '/discussions', { headers: h })).json();
       if (j && Array.isArray(j.threads) && j.threads.length) {
@@ -1290,6 +1326,7 @@
         render();
       }
     } catch (e) { /* best-effort -- this device's local/demo THREADS stays as-is */ }
+    finally { _backendHydrating = false; }
   }
   function registerJob(t, jobId, meta) {
     t.jobs = t.jobs || [];
@@ -1801,6 +1838,11 @@
   $('mohcaInput').value = DEFAULT_MOHCA; $('mohcaGrid').innerHTML = renderMohcaGrid(parseMohca(DEFAULT_MOHCA));
   renderTemplates();
   renderInfo();
+  // Set BEFORE this first render() (not inside loadThreadsFromBackend, called several lines
+  // below) -- render() -> saveThreads() -> syncThreadsToBackend() runs synchronously right here,
+  // and the guard must already be up by then or this very call is the one that schedules the
+  // clobbering PUT described above.
+  _backendHydrating = !!(API && authHeader());
   render();
   initAdvancedForm();
   loadAvailableModels();
