@@ -1499,7 +1499,84 @@
       var id = m.id || m, label = m.label || m;
       return '<option value="' + id + '"' + (id === SELECTED_MODEL ? ' selected' : '') + '>' + label + '</option>';
     }).join('');
-    sel.onchange = function () { SELECTED_MODEL = sel.value; toast('New predictions will use "' + sel.value + '".'); };
+    sel.onchange = function () {
+      SELECTED_MODEL = sel.value;
+      syncContactPanel();
+      toast('New predictions will use "' + sel.value + '".');
+    };
+    syncContactPanel();
+  }
+
+  // ---- Contact conditioning (the daslab-specialist pipeline) ----
+  // A SEPARATE control from both the model dropdown and the Advanced form. The model dropdown
+  // picks a pipeline; the Advanced form sets sampling knobs that apply to every model. This is
+  // REQUIRED input for one specific kind of model -- its checkpoints are trained to consume an
+  // asserted contact map, and the backend rejects a contact-conditioned request that supplies
+  // none. So the panel is revealed only while such a model is selected, and hidden (and ignored)
+  // otherwise. Which models those are is data-driven: /models marks them contact:true, so this
+  // file never hardcodes a model id.
+  function modelIsContactConditioned(id) {
+    if (!AVAILABLE_MODELS) return false;
+    for (var i = 0; i < AVAILABLE_MODELS.length; i++) {
+      var m = AVAILABLE_MODELS[i];
+      if ((m.id || m) === id) return !!m.contact;
+    }
+    return false;
+  }
+  function syncContactPanel() {
+    var panel = $('contactPanel'); if (!panel) return;
+    panel.hidden = !modelIsContactConditioned(SELECTED_MODEL);
+    renderContactHint();
+  }
+  // Accepts the two shapes a person actually types:
+  //   "10-90"      -> [10, 90]                 within one chain
+  //   "A10-B5"     -> {chain_i:'A', res_i:10, chain_j:'B', res_j:5}
+  // separated by commas, semicolons, newlines or whitespace. Returns {pairs, bad} so the caller
+  // can show what failed rather than silently dropping it -- a dropped contact is invisible in the
+  // result, which is the whole failure mode this feature has to avoid.
+  function parseContactPairs(raw) {
+    var out = { pairs: [], bad: [] };
+    var tokens = String(raw || '').split(/[,;\n]+|\s+/).filter(function (t) { return t.length; });
+    for (var i = 0; i < tokens.length; i++) {
+      var t = tokens[i];
+      var m = /^([A-Za-z]?)(\d+)[-:]([A-Za-z]?)(\d+)$/.exec(t);
+      if (!m) { out.bad.push(t); continue; }
+      var ci = m[1], ri = parseInt(m[2], 10), cj = m[3], rj = parseInt(m[4], 10);
+      if (!(ri > 0 && rj > 0)) { out.bad.push(t); continue; }
+      if (ci || cj) {
+        out.pairs.push({ chain_i: (ci || 'A').toUpperCase(), res_i: ri,
+                         chain_j: (cj || 'A').toUpperCase(), res_j: rj });
+      } else {
+        out.pairs.push([ri, rj]);
+      }
+    }
+    return out;
+  }
+  function contactValues() {
+    if (!modelIsContactConditioned(SELECTED_MODEL)) return null;
+    var el = $('contactPairs');
+    var parsed = parseContactPairs(el && el.value);
+    var ck = $('checkpointSelect');
+    return { pairs: parsed.pairs, bad: parsed.bad, checkpoint: (ck && ck.value) || 'auto' };
+  }
+  function renderContactHint() {
+    var el = $('contactHint'); if (!el) return;
+    var v = contactValues();
+    if (!v) { el.textContent = ''; return; }
+    if (v.bad.length) {
+      el.textContent = 'Could not read: ' + v.bad.join(', ') + ' — use 10-90 or A10-B5.';
+      return;
+    }
+    if (!v.pairs.length) {
+      el.textContent = 'Required for this model. 1-based residue pairs, e.g. 10-90, 20-80.';
+      return;
+    }
+    var inter = v.pairs.filter(function (p) {
+      return !Array.isArray(p) && p.chain_i !== p.chain_j;
+    }).length;
+    el.textContent = v.pairs.length + ' contact' + (v.pairs.length === 1 ? '' : 's')
+      + (inter ? ' (' + inter + ' between chains)' : ' (within one chain)')
+      + ' will be forced.';
   }
 
   // ---- Advanced form: per-request sampling knobs (N seeds x N samples/seed) ----
@@ -1523,10 +1600,21 @@
   // Single source for what gets SENT -- always re-read from the inputs rather than from a cached
   // copy, so a value typed mid-discussion applies to the very next submission.
   function advValues() {
-    return {
+    var v = {
       seeds: advClamp($('advSeeds') && $('advSeeds').value, 'seeds'),
       samples: advClamp($('advSamples') && $('advSamples').value, 'samples')
     };
+    // Contact conditioning rides in the same options object (web_bridge.py's _chat passes it to
+    // _run_chat_tool as `fleet`, which forwards these two keys into _predict's options). Only sent
+    // while a contact-conditioned model is selected: the bridge REJECTS contact_pairs for any
+    // other model rather than ignoring them, so leaking them across a model switch would turn
+    // every subsequent prediction into a 400.
+    var c = contactValues();
+    if (c && c.pairs.length) {
+      v.contact_pairs = c.pairs;
+      v.checkpoint = c.checkpoint;
+    }
+    return v;
   }
   function renderAdvHint(v) {
     var el = $('advHint'); if (!el) return;
@@ -1554,11 +1642,22 @@
         var v = advValues();
         // Write the clamped number back so the field never shows a value we won't actually send.
         seeds.value = v.seeds; samples.value = v.samples;
-        try { localStorage.setItem(ADV_KEY, JSON.stringify(v)); } catch (e) {}
+        // Persist ONLY the sampling knobs. advValues() may also carry contact_pairs, and a
+        // contact list restored from localStorage days later would silently condition a fold on
+        // whatever the last session happened to type -- exactly the kind of invisible wrong answer
+        // this feature has to avoid. Contacts are per-request, never remembered.
+        try { localStorage.setItem(ADV_KEY, JSON.stringify({ seeds: v.seeds, samples: v.samples })); } catch (e) {}
         renderAdvHint(v);
       });
     });
     renderAdvHint(advValues());
+    initContactForm();
+  }
+  function initContactForm() {
+    var pairs = $('contactPairs'), ck = $('checkpointSelect');
+    if (pairs) { pairs.addEventListener('input', renderContactHint); }
+    if (ck) { ck.addEventListener('change', renderContactHint); }
+    syncContactPanel();
   }
   async function fetchStageResult(stage) {
     if (stage.url) return (await fetch(stage.url + (stage.url.includes('?') ? '' : (tok() ? '?t=' + encodeURIComponent(tok()) : '')))).text();

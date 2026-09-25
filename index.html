@@ -73,6 +73,29 @@
       </span>
       <span class="adv-hint" id="advHint"><!-- filled by app.js --></span>
     </div>
+    <!-- Contact conditioning. Revealed ONLY while a contact-conditioned model is selected (that
+         model's /models entry carries contact:true), because those checkpoints are trained to
+         consume an asserted contact map and the backend rejects a request supplying none.
+         Deliberately a separate panel from #advPanel: those are sampling knobs that apply to every
+         model, this is REQUIRED input for one specific model. -->
+    <div class="contact-panel" id="contactPanel" hidden>
+      <span class="adv-field contact-grow">
+        <label class="adv-lbl" for="contactPairs">Contacts</label>
+        <input class="adv-text" id="contactPairs" type="text" autocomplete="off"
+               placeholder="10-90, 20-80   ·   between chains: A10-B5"
+               title="1-based residue pairs to force into contact. Comma or space separated.">
+      </span>
+      <span class="adv-field">
+        <label class="adv-lbl" for="checkpointSelect">Checkpoint</label>
+        <select class="adv-sel" id="checkpointSelect"
+                title="Which specialist checkpoint. Auto picks the one validated for the contact type you gave.">
+          <option value="auto" selected>Auto (from contacts)</option>
+          <option value="itt-contact">Intra-chain — pseudoknots</option>
+          <option value="contact-specialist">Inter-chain — docking</option>
+        </select>
+      </span>
+      <span class="adv-hint" id="contactHint"><!-- filled by app.js --></span>
+    </div>
     <div class="jobs-panel" id="jobsPanel" hidden><!-- filled by app.js --></div>
     <div class="chat-body" id="chatBody"><!-- filled by app.js --></div>
     <div class="chat-inputbar">

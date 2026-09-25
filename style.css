@@ -245,6 +245,30 @@ button { font-family: inherit; cursor: pointer; }
 .adv-num:focus { outline: none; border-color: var(--accent-dim); }
 .adv-hint { font-size: 11px; color: var(--text-muted); }
 
+/* Contact conditioning. Shares the Advanced form's visual language (same padding, gap, label and
+   hint styles) because it occupies the same slot, but is a SEPARATE panel: the Advanced form is
+   optional sampling knobs that apply to every model, this is required input revealed only while a
+   contact-conditioned model is selected. The left accent marks it as the latter. */
+.contact-panel {
+  flex: none; padding: 10px 20px; border-bottom: 1px solid var(--border-soft);
+  border-left: 2px solid var(--accent-dim);
+  display: flex; flex-wrap: wrap; gap: 16px; align-items: center;
+}
+.contact-grow { flex: 1 1 260px; }
+.adv-text {
+  flex: 1; min-width: 180px; padding: 5px 8px;
+  border: 1px solid var(--border); border-radius: 6px;
+  font-size: 12px; font-family: inherit;
+  background: var(--bg-panel); color: var(--text);
+}
+.adv-text:focus { outline: none; border-color: var(--accent-dim); }
+.adv-sel {
+  padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px;
+  font-size: 12px; font-family: inherit;
+  background: var(--bg-panel); color: var(--text);
+}
+.adv-sel:focus { outline: none; border-color: var(--accent-dim); }
+
 .jobs-panel {
   flex: none; padding: 10px 20px; border-bottom: 1px solid var(--border-soft);
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
