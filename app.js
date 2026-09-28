@@ -12,16 +12,13 @@
   // </script> — same contract as frontend/inference.js in rna-atlas-inference. Empty INFER_API =>
   // every backend call below is skipped in favor of the existing staged/simulated flow.
   var API = (window.INFER_API || '').replace(/\/$/, '');
-  // Legacy shared passcode (?t= on GETs, "token" in POST bodies). The bridge now authenticates
-  // every route with the Cognito ID token instead (apiFetch below); this stays only until the
-  // deploy stops injecting window.INFER_TOKEN, so the two backends can be cut over in either
-  // order without a window where the page sends neither credential.
-  function tok() { return window.INFER_TOKEN || ''; }
   // Every bridge call goes through here. RNAnixAuth.authFetch (auth.js) attaches the Cognito ID
   // token as `Authorization: Bearer ...` and retries once after a silent refresh on a 401 -- the
   // API Gateway JWT authorizer in front of the bridge answers 401 for an expired token, which a
   // 12 h ID token WILL be for anyone who leaves a tab open. Plain fetch() only when auth.js is
   // not loaded at all (the standalone mockup). Never used for presigned S3 URLs (fetchStageResult).
+  // (The shared INFER_TOKEN passcode this page used to send as ?t= / body.token is gone: the
+  // bridge no longer reads it, and it was readable in the page source anyway.)
   function apiFetch(url, init) {
     return (window.RNAnixAuth && RNAnixAuth.authFetch) ? RNAnixAuth.authFetch(url, init) : fetch(url, init);
   }
@@ -1484,7 +1481,7 @@
   async function reopenJob(t, jobId) {
     if (!API) return { ok: false, error: 'Not connected to the inference API.' };
     try {
-      var j = await (await apiFetch(API + '/status?job=' + encodeURIComponent(jobId) + (tok() ? '&t=' + encodeURIComponent(tok()) : ''))).json();
+      var j = await (await apiFetch(API + '/status?job=' + encodeURIComponent(jobId))).json();
       var m = mapPredictStatus(j);
       var stage = (m.msa && (m.msa.url || m.msa.cif)) ? m.msa : ((m.nomsa && (m.nomsa.url || m.nomsa.cif)) ? m.nomsa : null);
       if (!stage) { toast('No stored result for this job anymore.'); return { ok: false, error: 'No stored result for this job anymore.' }; }
@@ -1500,7 +1497,7 @@
   async function loadAvailableModels() {
     if (!API) return;
     try {
-      var r = await apiFetch(API + '/models' + (tok() ? '?t=' + encodeURIComponent(tok()) : ''));
+      var r = await apiFetch(API + '/models');
       var j = await r.json();
       AVAILABLE_MODELS = j.models || j || [];
       if (AVAILABLE_MODELS.length) {
@@ -1750,7 +1747,7 @@
   // this is deliberately plain fetch(), not apiFetch(): S3 refuses a request that carries both a
   // query-string signature and an Authorization header.
   async function fetchStageResult(stage) {
-    if (stage.url) return (await fetch(stage.url + (stage.url.includes('?') ? '' : (tok() ? '?t=' + encodeURIComponent(tok()) : '')))).text();
+    if (stage.url) return (await fetch(stage.url)).text();
     return stage.cif || '';
   }
   function mapPredictStatus(j) {
@@ -1780,7 +1777,7 @@
   async function showPredictionBrief(jobId, t) {
     if (!API) return;
     try {
-      var r = await (await apiFetch(API + '/brief?job=' + encodeURIComponent(jobId) + (tok() ? '&t=' + encodeURIComponent(tok()) : ''))).json();
+      var r = await (await apiFetch(API + '/brief?job=' + encodeURIComponent(jobId))).json();
       if (!r.brief && !r.rationale && !r.thinking) return;
       t.msgs.push({ role: 'assistant', text: r.brief || r.rationale || 'Research finished.', thinking: r.thinking,
         sources: (r.template_pdb_ids || []).map(function (id) { return { label: 'PDB ' + id, url: 'https://www.rcsb.org/structure/' + id }; }) });
@@ -1836,7 +1833,7 @@
     var MAX_POLL_MS = 4 * 60 * 60 * 1000;
     while (Date.now() - startTime < MAX_POLL_MS) {
       var j;
-      try { j = await (await apiFetch(API + '/status?job=' + encodeURIComponent(jobId) + (tok() ? '&t=' + encodeURIComponent(tok()) : ''))).json(); }
+      try { j = await (await apiFetch(API + '/status?job=' + encodeURIComponent(jobId))).json(); }
       catch (e) { if (card) card.result = 'status check failed: ' + e.message; render(); return; }
       var m = mapPredictStatus(j);
       if (card) card.result = 'state: ' + m.state;
@@ -2031,7 +2028,7 @@
     // the response lands.
     var pending = { role: 'assistant', pending: true };
     t.msgs.push(pending); render();
-    var body = { messages: buildChatMessages(t), model: SELECTED_MODEL, options: advValues(), token: tok() };
+    var body = { messages: buildChatMessages(t), model: SELECTED_MODEL, options: advValues() };
     var j, allToolCalls = [], allThinking = [];
     // Bounded round-trip loop: each POST either finishes (a reply) or pauses on a client tool
     // (get_structure_data etc.) that only the browser can execute -- see casp_web.py's _chat().
@@ -2069,7 +2066,7 @@
       render();
       // options re-sent on every round: _chat threads them per-request, so a turn that resumes
       // after a client tool must carry them again or its submit_prediction reverts to defaults.
-      body = { convo: j.convo, extra_tool_results: (j.resolved_tool_results || []).concat(clientResults), model: SELECTED_MODEL, options: advValues(), token: tok() };
+      body = { convo: j.convo, extra_tool_results: (j.resolved_tool_results || []).concat(clientResults), model: SELECTED_MODEL, options: advValues() };
     }
     var idxDone = t.msgs.indexOf(pending);
     if (idxDone !== -1) t.msgs.splice(idxDone, 1);
@@ -2093,7 +2090,7 @@
     var firstUser = t.msgs.filter(function (m) { return m.role === 'user'; })[0];
     if (!firstUser || !firstUser.text) return;
     _titlingInFlight[t.id] = true;
-    apiFetch(API + '/title', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: firstUser.text, token: tok() }) })
+    apiFetch(API + '/title', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: firstUser.text }) })
       .then(function (r) { return r.json(); })
       .then(function (j) { if (j && j.title) { t.title = j.title; render(); } })
       .catch(function () { /* best-effort -- thread just keeps its "New chat" title */ })
