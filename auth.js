@@ -13,6 +13,15 @@
   var CLIENT_ID = window.COGNITO_CLIENT_ID || '';
   var ENDPOINT = REGION ? ('https://cognito-idp.' + REGION + '.amazonaws.com/') : '';
   var SESSION_KEY = 'rnanix_session';
+  // The edge gate in front of the whole site (rna-atlas-inference/lambda_src/edge_auth, a
+  // Lambda@Edge on CloudFront's viewer-request) cannot see localStorage -- it reads THIS cookie
+  // and verifies the ID token in it before any object is served. Mirror the token into it on
+  // every login / silent refresh, clear it on logout. It is not HttpOnly by construction (JS
+  // sets it); the same token already lives in localStorage, so that adds no new exposure.
+  // AUTH_COOKIE_DOMAIN is injected at deploy time (e.g. "rna-atlas.org") so apex and www share
+  // one session; unset = host-only cookie, which is right for local dev.
+  var COOKIE_NAME = 'rnanix_id';
+  var COOKIE_DOMAIN = window.AUTH_COOKIE_DOMAIN || '';
   // localStorage, not sessionStorage: sessionStorage is scoped to one browsing-context/tab, so a
   // session saved in tab A is invisible to a brand-new tab B on the same origin -- requireAuth()
   // in B sees no session at all and bounces to login.html, even seconds after logging in in A.
@@ -36,19 +45,35 @@
   // refreshToken is optional: REFRESH_TOKEN_AUTH's own response never includes a new one (the
   // original stays valid, ~30 days by default), so refreshSession() must pass the existing one
   // through explicitly here or it would get silently wiped on every renewal.
+  function cookieAttrs(maxAge) {
+    var a = '; Path=/; Max-Age=' + maxAge + '; SameSite=Lax';
+    if (location.protocol === 'https:') a += '; Secure';
+    if (COOKIE_DOMAIN) a += '; Domain=' + COOKIE_DOMAIN;
+    return a;
+  }
+  function setCookie(idToken, expiresAt) {
+    document.cookie = COOKIE_NAME + '=' + idToken + cookieAttrs(Math.max(0, Math.floor((expiresAt - Date.now()) / 1000)));
+  }
+  function clearCookie() { document.cookie = COOKIE_NAME + '=' + cookieAttrs(0); }
+  function hasCookie() {
+    return document.cookie.split(';').some(function (p) { return p.trim().indexOf(COOKIE_NAME + '=') === 0; });
+  }
+
   function saveSession(auth, email, refreshToken) {
+    var expiresAt = Date.now() + (auth.ExpiresIn || 3600) * 1000;
     storage.setItem(SESSION_KEY, JSON.stringify({
       idToken: auth.IdToken, accessToken: auth.AccessToken,
       refreshToken: auth.RefreshToken || refreshToken,
-      expiresAt: Date.now() + (auth.ExpiresIn || 3600) * 1000, email: email || '',
+      expiresAt: expiresAt, email: email || '',
     }));
+    setCookie(auth.IdToken, expiresAt);
   }
 
   function getSession() {
     try { return JSON.parse(storage.getItem(SESSION_KEY) || 'null'); } catch (e) { return null; }
   }
 
-  function clearSession() { storage.removeItem(SESSION_KEY); }
+  function clearSession() { storage.removeItem(SESSION_KEY); clearCookie(); }
 
   // The ID/access token dies after ~1 hour (Cognito default); the refresh token that was sitting
   // in the session unused until now is normally good for ~30 days. Silently trades the former for
@@ -110,12 +135,27 @@
       // call in <head>): render optimistically, renew in the background, and only bounce to
       // login from here if the refresh token itself turns out to be dead too.
       refreshSession().then(function (ok) { if (!ok) location.href = 'login.html'; });
+    } else if (!hasCookie()) {
+      setCookie(s.idToken, s.expiresAt);   // session predates the cookie mirror -- backfill it
     }
     return true;
+  }
+
+  // For login.html: if this browser already holds a usable session (e.g. the edge gate bounced
+  // someone who logged in before the cookie existed, or whose cookie expired while the refresh
+  // token is still good), make the cookie current and report true so the page can skip the form
+  // and send them straight back to where they were going. Never prompts, never throws.
+  function resume() {
+    if (!configured()) return Promise.resolve(false);
+    var s = getSession();
+    if (!s || !s.idToken) return Promise.resolve(false);
+    if (Date.now() < s.expiresAt) { setCookie(s.idToken, s.expiresAt); return Promise.resolve(true); }
+    return refreshSession();   // saveSession() inside it re-sets the cookie
   }
 
   window.RNAnixAuth = {
     configured: configured, login: login, completeNewPassword: completeNewPassword,
     logout: logout, getSession: getSession, requireAuth: requireAuth, refreshSession: refreshSession,
+    resume: resume,
   };
 })();

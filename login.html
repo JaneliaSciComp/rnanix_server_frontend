@@ -60,9 +60,28 @@
   </div>
 </div>
 
+<!-- Only auth.js here, deliberately: this page (plus auth.js + style.css) is the one thing the
+     edge gate serves to visitors who are NOT logged in, so it must not pull in app.js -- both to
+     keep the un-authenticated surface minimal and because app.js does nothing on this page. -->
 <script src="auth.js"></script>
-<script src="app.js"></script>
 <script>
+// ?next= is set by the edge gate: the same-origin path the visitor originally asked for ("/",
+// "/v0/inference/", ...). Only an absolute path on THIS origin is honoured -- never a full URL,
+// never "//host", never the login page itself -- so this cannot become an open redirect.
+function safeNext() {
+  var n = new URLSearchParams(location.search).get('next') || '';
+  if (/^\/(?!\/)[^\\\s]*$/.test(n) && !/login\.html/.test(n)) return n;
+  return 'index.html';
+}
+
+// Someone with a still-valid session in this browser (or a live refresh token) never needs the
+// form: refresh the edge cookie and send them on. Covers everyone who logged in before the cookie
+// existed and got bounced here by the gate.
+(function () {
+  if (!window.RNAnixAuth || !RNAnixAuth.configured()) return;
+  RNAnixAuth.resume().then(function (ok) { if (ok) location.replace(safeNext()); });
+})();
+
 document.querySelectorAll('.auth-tabs button').forEach(function (b) {
   b.onclick = function () {
     document.querySelectorAll('.auth-tabs button').forEach(function (x) { x.classList.remove('active'); });
@@ -103,7 +122,7 @@ document.getElementById('loginForm').addEventListener('submit', async function (
   var pw = document.getElementById('login-pw').value;
   try {
     await RNAnixAuth.login(email, pw);
-    location.href = 'index.html';
+    location.href = safeNext();
   } catch (err) {
     if (err.challenge === 'NEW_PASSWORD_REQUIRED') {
       pendingInviteSession = err.session;
@@ -129,7 +148,7 @@ document.getElementById('inviteForm').addEventListener('submit', async function 
   if (!pendingInviteSession) { errEl.textContent = 'Log in with your temporary password first (Log in tab).'; errEl.hidden = false; return; }
   try {
     await RNAnixAuth.completeNewPassword(email, pw, pendingInviteSession);
-    location.href = 'index.html';
+    location.href = safeNext();
   } catch (err) {
     errEl.textContent = err.message || 'Could not set password.'; errEl.hidden = false;
   }
