@@ -9,11 +9,22 @@
 
   // ================= real backend wiring =================
   // Set before this file loads, e.g. <script>window.INFER_API = "https://xyz.execute-api...";
-  // window.INFER_TOKEN = "...";</script> — same contract as frontend/inference.js in
-  // rna-atlas-inference. Empty INFER_API => every backend call below is skipped in favor of the
-  // existing staged/simulated flow.
+  // </script> — same contract as frontend/inference.js in rna-atlas-inference. Empty INFER_API =>
+  // every backend call below is skipped in favor of the existing staged/simulated flow.
   var API = (window.INFER_API || '').replace(/\/$/, '');
+  // Legacy shared passcode (?t= on GETs, "token" in POST bodies). The bridge now authenticates
+  // every route with the Cognito ID token instead (apiFetch below); this stays only until the
+  // deploy stops injecting window.INFER_TOKEN, so the two backends can be cut over in either
+  // order without a window where the page sends neither credential.
   function tok() { return window.INFER_TOKEN || ''; }
+  // Every bridge call goes through here. RNAnixAuth.authFetch (auth.js) attaches the Cognito ID
+  // token as `Authorization: Bearer ...` and retries once after a silent refresh on a 401 -- the
+  // API Gateway JWT authorizer in front of the bridge answers 401 for an expired token, which a
+  // 12 h ID token WILL be for anyone who leaves a tab open. Plain fetch() only when auth.js is
+  // not loaded at all (the standalone mockup). Never used for presigned S3 URLs (fetchStageResult).
+  function apiFetch(url, init) {
+    return (window.RNAnixAuth && RNAnixAuth.authFetch) ? RNAnixAuth.authFetch(url, init) : fetch(url, init);
+  }
   function fmtOf(text) { return (text.startsWith('data_') || text.includes('_atom_site')) ? 'cif' : 'pdb'; }
 
   // ================= small utilities =================
@@ -1377,8 +1388,10 @@
   }
   // ---- backend-stored history (GET/PUT /discussions), so a discussion survives a browser/
   // device switch instead of living only in localStorage. Gated on real Cognito auth being
-  // configured -- these two routes are the only ones behind a JWT authorizer (discussions.tf),
-  // not the shared WEB_TOKEN, so they need a real Authorization: Bearer <ID token> header. ----
+  // configured: without a session there is no user to key the history on, so skip the sync
+  // entirely (demo mode) rather than let apiFetch bounce to the login page from a background
+  // save. The Bearer header itself is (re)attached by apiFetch, this one is the "is anyone
+  // logged in" check. ----
   function authHeader() {
     var s = window.RNAnixAuth && RNAnixAuth.configured() && RNAnixAuth.getSession();
     return (s && s.idToken) ? { 'Authorization': 'Bearer ' + s.idToken } : null;
@@ -1402,7 +1415,7 @@
     // within a short window actually matters.
     _discussionsSyncTimer = setTimeout(function () {
       h['content-type'] = 'application/json';
-      fetch(API + '/discussions', { method: 'PUT', headers: h, body: JSON.stringify({ threads: THREADS.slice(0, 50) }) })
+      apiFetch(API + '/discussions', { method: 'PUT', headers: h, body: JSON.stringify({ threads: THREADS.slice(0, 50) }) })
         .catch(function () { /* best-effort -- localStorage stays the source of truth on this device either way */ });
     }, 2000);
   }
@@ -1412,7 +1425,7 @@
     if (!API) { _backendHydrating = false; return; }
     var h = authHeader(); if (!h) { _backendHydrating = false; return; }
     try {
-      var j = await (await fetch(API + '/discussions', { headers: h })).json();
+      var j = await (await apiFetch(API + '/discussions', { headers: h })).json();
       if (j && Array.isArray(j.threads) && j.threads.length) {
         // Same "pending" cleanup loadThreads() already does for localStorage -- the debounced
         // backend sync can fire mid-request (a "thinking" reply taking longer than the 2s
@@ -1471,7 +1484,7 @@
   async function reopenJob(t, jobId) {
     if (!API) return { ok: false, error: 'Not connected to the inference API.' };
     try {
-      var j = await (await fetch(API + '/status?job=' + encodeURIComponent(jobId) + (tok() ? '&t=' + encodeURIComponent(tok()) : ''))).json();
+      var j = await (await apiFetch(API + '/status?job=' + encodeURIComponent(jobId) + (tok() ? '&t=' + encodeURIComponent(tok()) : ''))).json();
       var m = mapPredictStatus(j);
       var stage = (m.msa && (m.msa.url || m.msa.cif)) ? m.msa : ((m.nomsa && (m.nomsa.url || m.nomsa.cif)) ? m.nomsa : null);
       if (!stage) { toast('No stored result for this job anymore.'); return { ok: false, error: 'No stored result for this job anymore.' }; }
@@ -1487,7 +1500,7 @@
   async function loadAvailableModels() {
     if (!API) return;
     try {
-      var r = await fetch(API + '/models' + (tok() ? '?t=' + encodeURIComponent(tok()) : ''));
+      var r = await apiFetch(API + '/models' + (tok() ? '?t=' + encodeURIComponent(tok()) : ''));
       var j = await r.json();
       AVAILABLE_MODELS = j.models || j || [];
       if (AVAILABLE_MODELS.length) {
@@ -1733,6 +1746,9 @@
     if (ck) { ck.addEventListener('change', renderContactHint); }
     syncContactPanel();
   }
+  // stage.url is a presigned S3 URL (a legacy job whose result the bridge does not inline), so
+  // this is deliberately plain fetch(), not apiFetch(): S3 refuses a request that carries both a
+  // query-string signature and an Authorization header.
   async function fetchStageResult(stage) {
     if (stage.url) return (await fetch(stage.url + (stage.url.includes('?') ? '' : (tok() ? '?t=' + encodeURIComponent(tok()) : '')))).text();
     return stage.cif || '';
@@ -1764,7 +1780,7 @@
   async function showPredictionBrief(jobId, t) {
     if (!API) return;
     try {
-      var r = await (await fetch(API + '/brief?job=' + encodeURIComponent(jobId) + (tok() ? '&t=' + encodeURIComponent(tok()) : ''))).json();
+      var r = await (await apiFetch(API + '/brief?job=' + encodeURIComponent(jobId) + (tok() ? '&t=' + encodeURIComponent(tok()) : ''))).json();
       if (!r.brief && !r.rationale && !r.thinking) return;
       t.msgs.push({ role: 'assistant', text: r.brief || r.rationale || 'Research finished.', thinking: r.thinking,
         sources: (r.template_pdb_ids || []).map(function (id) { return { label: 'PDB ' + id, url: 'https://www.rcsb.org/structure/' + id }; }) });
@@ -1799,7 +1815,7 @@
     var MAX_POLL_MS = 4 * 60 * 60 * 1000;
     while (Date.now() - startTime < MAX_POLL_MS) {
       var j;
-      try { j = await (await fetch(API + '/status?job=' + encodeURIComponent(jobId) + (tok() ? '&t=' + encodeURIComponent(tok()) : ''))).json(); }
+      try { j = await (await apiFetch(API + '/status?job=' + encodeURIComponent(jobId) + (tok() ? '&t=' + encodeURIComponent(tok()) : ''))).json(); }
       catch (e) { if (card) card.result = 'status check failed: ' + e.message; render(); return; }
       var m = mapPredictStatus(j);
       if (card) card.result = 'state: ' + m.state;
@@ -2000,7 +2016,7 @@
     // (get_structure_data etc.) that only the browser can execute -- see casp_web.py's _chat().
     for (var round = 0; round < 6; round++) {
       try {
-        var r = await fetch(API + '/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        var r = await apiFetch(API + '/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
         // The bridge always answers with a JSON body, even on a 4xx/5xx (e.g. {"error": "..."}) --
         // parse it before deciding the request failed, so a real backend error message reaches
         // the chat instead of being collapsed into a bare "HTTP 502".
@@ -2056,7 +2072,7 @@
     var firstUser = t.msgs.filter(function (m) { return m.role === 'user'; })[0];
     if (!firstUser || !firstUser.text) return;
     _titlingInFlight[t.id] = true;
-    fetch(API + '/title', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: firstUser.text, token: tok() }) })
+    apiFetch(API + '/title', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: firstUser.text, token: tok() }) })
       .then(function (r) { return r.json(); })
       .then(function (j) { if (j && j.title) { t.title = j.title; render(); } })
       .catch(function () { /* best-effort -- thread just keeps its "New chat" title */ })

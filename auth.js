@@ -160,9 +160,53 @@
     return refreshSession();   // saveSession() inside it re-sets the cookie
   }
 
+  // fetch() for the inference API. Attaches the session's Cognito ID token as
+  // `Authorization: Bearer ...` and, on a 401, silently refreshes the session ONCE and retries.
+  //
+  // Every bridge route sits behind API Gateway's JWT authorizer (rna-atlas-inference
+  // terraform/api_gateway.tf), which answers 401 {"message":"Unauthorized"} -- before the Lambda
+  // ever runs -- for a missing, expired or foreign token. Without the retry, an ID token that
+  // expires mid-session (12 h validity; a tab left open overnight) turns every status poll and
+  // chat turn into a dead request until the user happens to reload. Outcomes:
+  //   * 200/4xx/5xx other than 401     -> returned as-is
+  //   * 401, refresh succeeds          -> ONE retry with the new token; its response is returned
+  //                                       as-is, even if that is a 401 again (no loop)
+  //   * 401, refresh fails             -> the refresh token is dead too and nothing here can
+  //                                       recover: logout() (clears the session, bounces to the
+  //                                       login page with ?next=), the same terminal outcome
+  //                                       requireAuth() has, then throw so the caller's own error
+  //                                       path runs
+  // Unconfigured (demo mode): no session, no header, no retry -- behaves exactly like fetch().
+  //
+  // Only ever use this for the bridge API, never for a presigned S3 URL: S3 rejects a request
+  // carrying BOTH a query-string signature and an Authorization header.
+  function withBearer(init, idToken) {
+    var headers = {};
+    var given = (init && init.headers) || {};
+    if (typeof Headers !== 'undefined' && given instanceof Headers) given.forEach(function (v, k) { headers[k] = v; });
+    else Object.keys(given).forEach(function (k) { headers[k] = given[k]; });
+    if (idToken) headers['Authorization'] = 'Bearer ' + idToken;
+    var out = {};
+    Object.keys(init || {}).forEach(function (k) { out[k] = init[k]; });
+    out.headers = headers;
+    return out;
+  }
+  async function authFetch(url, init) {
+    var s = configured() ? getSession() : null;
+    var r = await fetch(url, withBearer(init, s && s.idToken));
+    if (r.status !== 401 || !configured()) return r;
+    var renewed = await refreshSession();
+    if (!renewed) {
+      logout();
+      throw new Error('Your session has expired -- please sign in again.');
+    }
+    s = getSession();
+    return fetch(url, withBearer(init, s && s.idToken));
+  }
+
   window.RNAnixAuth = {
     configured: configured, login: login, completeNewPassword: completeNewPassword,
     logout: logout, getSession: getSession, requireAuth: requireAuth, refreshSession: refreshSession,
-    resume: resume,
+    resume: resume, authFetch: authFetch,
   };
 })();
