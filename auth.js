@@ -37,6 +37,7 @@
   // original stays valid, ~30 days by default), so refreshSession() must pass the existing one
   // through explicitly here or it would get silently wiped on every renewal.
   function saveSession(auth, email, refreshToken) {
+    setIdTokenCookie(auth.IdToken, auth.ExpiresIn || 3600);
     storage.setItem(SESSION_KEY, JSON.stringify({
       idToken: auth.IdToken, accessToken: auth.AccessToken,
       refreshToken: auth.RefreshToken || refreshToken,
@@ -48,7 +49,16 @@
     try { return JSON.parse(storage.getItem(SESSION_KEY) || 'null'); } catch (e) { return null; }
   }
 
-  function clearSession() { storage.removeItem(SESSION_KEY); }
+  function clearSession() { storage.removeItem(SESSION_KEY); setIdTokenCookie('', 0); }
+
+  // The ID token is also written to a host-scoped cookie, so an edge check (e.g. a CloudFront
+  // Lambda@Edge in front of a site that serves its own login page on top of this file) can verify
+  // every request, including ones for pages that never load auth.js. RNAnix itself still reads the
+  // token from localStorage. Max-Age tracks the token's own lifetime, so the edge never sees a
+  // cookie outliving its token.
+  function setIdTokenCookie(idToken, maxAgeSeconds) {
+    document.cookie = 'id_token=' + idToken + '; Path=/; Secure; SameSite=Lax; Max-Age=' + maxAgeSeconds;
+  }
 
   // The ID/access token dies after ~1 hour (Cognito default); the refresh token that was sitting
   // in the session unused until now is normally good for ~30 days. Silently trades the former for
@@ -95,6 +105,28 @@
     return j.AuthenticationResult;
   }
 
+  // For a login page that an edge check redirected to with ?next=<path>. nextUrl() is where to go
+  // after sign-in: that path, or index.html. Only same-origin targets are honored, so a crafted
+  // login link can't bounce a freshly signed-in user to another site (an open redirect).
+  function nextUrl() {
+    var next = new URLSearchParams(location.search).get('next');
+    if (next) {
+      try {
+        var u = new URL(next, location.origin);
+        if (u.origin === location.origin) return u.pathname + u.search + u.hash;
+      } catch (e) { /* malformed -- fall through */ }
+    }
+    return 'index.html';
+  }
+
+  // Call on login-page load. The edge's cookie expires with the ~12 h ID token, but the ~30-day
+  // refresh token is often still good: renew silently and go straight back to ?next= instead of
+  // asking for a password. Resolves false (stay on the login form) without ?next= or on failure.
+  function resumeSession() {
+    if (!configured() || !new URLSearchParams(location.search).has('next')) return Promise.resolve(false);
+    return refreshSession().then(function (ok) { if (ok) location.href = nextUrl(); return ok; });
+  }
+
   function logout() { clearSession(); location.href = 'login.html'; }
 
   // Called at the top of index.html. No-op (returns true) when Cognito isn't configured, so the
@@ -117,5 +149,6 @@
   window.RNAnixAuth = {
     configured: configured, login: login, completeNewPassword: completeNewPassword,
     logout: logout, getSession: getSession, requireAuth: requireAuth, refreshSession: refreshSession,
+    nextUrl: nextUrl, resumeSession: resumeSession,
   };
 })();
