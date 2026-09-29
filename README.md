@@ -100,6 +100,12 @@ own `COGNITO_CLIENT_ID`, and gate every request at the edge instead of in page c
 - After sign-in and every silent refresh, `auth.js` also writes the ID token to an `id_token`
   cookie (`Path=/; Secure; SameSite=Lax`, `Max-Age` equal to the token's lifetime). Logout clears
   it. The cookie is host-scoped, so each site serves its own copy of `auth.js`.
+- The edge redirects to `/login.html?next=<path>`. The login page calls
+  `RNAnixAuth.resumeSession()` on load: if the refresh token is still valid, it renews silently
+  and returns to `next` without asking for a password. After a normal sign-in, the page sends
+  the user to `RNAnixAuth.nextUrl()`, which is `next` (same-origin paths only) or `index.html`.
+
+RNAnix itself doesn't call either function.
 
 There is no self-service sign-up. `scripts/invite_user.sh <email>` in `rna-atlas-inference`
 creates a Cognito user (`AdminCreateUser`), which emails them a temporary password; their first

@@ -105,6 +105,28 @@
     return j.AuthenticationResult;
   }
 
+  // For a login page that an edge check redirected to with ?next=<path>. nextUrl() is where to go
+  // after sign-in: that path, or index.html. Only same-origin targets are honored, so a crafted
+  // login link can't bounce a freshly signed-in user to another site (an open redirect).
+  function nextUrl() {
+    var next = new URLSearchParams(location.search).get('next');
+    if (next) {
+      try {
+        var u = new URL(next, location.origin);
+        if (u.origin === location.origin) return u.pathname + u.search + u.hash;
+      } catch (e) { /* malformed -- fall through */ }
+    }
+    return 'index.html';
+  }
+
+  // Call on login-page load. The edge's cookie expires with the ~12 h ID token, but the ~30-day
+  // refresh token is often still good: renew silently and go straight back to ?next= instead of
+  // asking for a password. Resolves false (stay on the login form) without ?next= or on failure.
+  function resumeSession() {
+    if (!configured() || !new URLSearchParams(location.search).has('next')) return Promise.resolve(false);
+    return refreshSession().then(function (ok) { if (ok) location.href = nextUrl(); return ok; });
+  }
+
   function logout() { clearSession(); location.href = 'login.html'; }
 
   // Called at the top of index.html. No-op (returns true) when Cognito isn't configured, so the
@@ -127,5 +149,6 @@
   window.RNAnixAuth = {
     configured: configured, login: login, completeNewPassword: completeNewPassword,
     logout: logout, getSession: getSession, requireAuth: requireAuth, refreshSession: refreshSession,
+    nextUrl: nextUrl, resumeSession: resumeSession,
   };
 })();
