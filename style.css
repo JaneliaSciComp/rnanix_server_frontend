@@ -224,12 +224,36 @@ button { font-family: inherit; cursor: pointer; }
   font-family: inherit; cursor: pointer; max-width: 160px;
 }
 .model-select:hover { color: var(--text); border-color: var(--accent-dim); }
+.model-select-wrap { position: relative; display: inline-flex; align-items: center; gap: 6px; }
+.model-info-btn {
+  width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--border);
+  background: var(--bg-elevated); color: var(--text-dim); font-family: Georgia, serif;
+  font-weight: 800; font-size: 11px; line-height: 1; padding: 0; flex: none;
+}
+.model-info-btn:hover, .model-info-btn[aria-expanded="true"] { color: var(--text); border-color: var(--accent-dim); }
+.model-info-pop {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; width: 300px;
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px;
+  padding: 11px 13px; font-size: 12px; line-height: 1.5; color: var(--text-muted);
+  box-shadow: 0 14px 34px rgba(0,0,0,.45);
+}
+.model-info-pop .mip-summary { color: var(--text); font-weight: 600; margin-bottom: 6px; }
+.model-info-pop ul { margin: 0 0 6px; padding-left: 16px; }
+.model-info-pop li { margin-bottom: 3px; }
+.model-info-pop .mip-note { color: var(--text-dim); font-size: 11px; }
 .adv-toggle {
   font-size: 12px; color: var(--text-muted); background: var(--bg-elevated);
   border: 1px solid var(--border); padding: 6px 11px; border-radius: 999px;
 }
 .adv-toggle:hover { color: var(--text); border-color: var(--accent-dim); }
 .adv-toggle[aria-expanded="true"] { color: var(--text); border-color: var(--accent-dim); background: var(--bg-panel); }
+
+.atlas-nav-btn {
+  font-size: 12px; color: var(--text-muted); background: var(--bg-elevated);
+  border: 1px solid var(--border); padding: 6px 11px; border-radius: 999px;
+  text-decoration: none; white-space: nowrap;
+}
+.atlas-nav-btn:hover { color: var(--text); border-color: var(--accent-dim); }
 
 .adv-panel {
   flex: none; padding: 10px 20px; border-bottom: 1px solid var(--border-soft);

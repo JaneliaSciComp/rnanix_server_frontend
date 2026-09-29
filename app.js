@@ -861,7 +861,11 @@
   }
   $('dlMain').onclick = function () { doDownload('zip'); };
   $('dlCaret').onclick = function (e) { e.stopPropagation(); $('dlMenu').hidden = !$('dlMenu').hidden; };
-  document.addEventListener('click', function () { $('dlMenu').hidden = true; $('attachMenu').hidden = true; });
+  document.addEventListener('click', function () {
+    $('dlMenu').hidden = true; $('attachMenu').hidden = true;
+    if ($('modelInfoPop')) $('modelInfoPop').hidden = true;
+    if ($('modelInfoBtn')) $('modelInfoBtn').setAttribute('aria-expanded', 'false');
+  });
   $('dlMenu').querySelectorAll('.dl-item').forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); $('dlMenu').hidden = true; doDownload(b.dataset.k); }; });
 
   // ================= tabs =================
@@ -1502,9 +1506,79 @@
     sel.onchange = function () {
       SELECTED_MODEL = sel.value;
       syncContactPanel();
+      renderModelInfo();
       toast('New predictions will use "' + sel.value + '".');
     };
     syncContactPanel();
+    renderModelInfo();
+  }
+
+  // ---- Model info popover: which checkpoint(s) a server dropdown entry actually runs ----
+  // Kept static here rather than fetched: /models only returns {id,label,contact} today, and
+  // daslab-base/v0/kgl-synth route to an external atlas-workspace pipeline this repo doesn't own
+  // (see terraform/iam.tf's ATLAS_MODELS), so there's no single place server-side to hang this on
+  // without touching terraform across a live production stack. Cross-checked against
+  // rna-atlas-inference + the RNAnix training repo on 2026-09-29 -- see each entry's `note` for
+  // what's actually verifiable vs. not. A model id with no entry here just gets no button (see
+  // renderModelInfo), so a future server never shows a wrong or empty popover.
+  var MODEL_CHECKPOINT_INFO = {
+    'daslab-ptnx1': {
+      summary: 'Reference Protenix pipeline — no RNAnix fine-tuning.',
+      items: ['Stock Protenix v1.1 release checkpoint (protenix_base_20250630_v1.0.0) — not one of the RNAnix-trained checkpoints on the other servers.']
+    },
+    'daslab-base': {
+      summary: '5-checkpoint RNAnix fleet (the calibrated_20260424 spec), one sample kept per checkpoint:',
+      items: [
+        'A1_complex_no_tpl — complex checkpoint, no 3D template (folds RNA with protein/DNA/ligand partners)',
+        'A2_complex_tpl — complex checkpoint, with 3D template pathway',
+        'A3_rnaonly_no_tpl — RNA-only, no template (strongest single checkpoint on the internal benchmark)',
+        'A4_rnaonly_tpl — RNA-only, with template',
+        'A3_rnaonly_no_tpl_wildcard — second RNA-only/no-template checkpoint from a different training run'
+      ],
+      note: 'Confirmed live: the deployed handler\'s FLEET_SPEC points at this exact file, which matches the RNAnix inference image\'s default and this repo\'s own test suite.'
+    },
+    'daslab-v0': {
+      summary: '5-checkpoint RNA-only RNAnix fleet (the concat_seq spec) — an earlier, pre-calibration generation than "base". All 5 use MSA + templates:',
+      items: [
+        'px1_cueq_MAIN_step49999',
+        'innerbergerm_protenix_v1_cueq_tf32_step69999',
+        'innerbergerm_protenix_v1_step62499',
+        'rib2_ablation_tbm_2nodes_step29999',
+        'rib2_ablation_tbm_Px1_step39999'
+      ],
+      note: 'Confirmed live from the deployed handler\'s FLEET_SPEC. These are internal training-run ids, not documented elsewhere.'
+    },
+    'daslab-specialist': {
+      summary: 'Exactly 2 checkpoints, chosen by contact type (or Auto, from your contacts):',
+      items: [
+        'itt-contact — intra-chain contacts (pseudoknots, tertiary motifs), no MSA',
+        'contact-specialist — inter-chain contacts (protein↔RNA docking), uses MSA'
+      ]
+    },
+    'kgl-synth': {
+      summary: '⚠ Currently returns no result from this website — the run finishes "successfully" but skips prediction entirely.',
+      items: ['Underlying pipeline: a Kaggle-methods-derived ensemble (exact checkpoint/model composition not documented in this repo). It needs an MSA branch to run one, and this site currently submits without one.'],
+      note: 'Confirmed against live execution history: recent runs SUCCEEDED with zero output objects.'
+    }
+  };
+  function renderModelInfo() {
+    var btn = $('modelInfoBtn'), pop = $('modelInfoPop'); if (!btn || !pop) return;
+    var info = MODEL_CHECKPOINT_INFO[SELECTED_MODEL];
+    btn.hidden = !info;
+    if (!info) { pop.hidden = true; pop.innerHTML = ''; return; }
+    pop.innerHTML = '<div class="mip-summary">' + info.summary + '</div>' +
+      (info.items.length ? '<ul>' + info.items.map(function (i) { return '<li>' + i + '</li>'; }).join('') + '</ul>' : '') +
+      (info.note ? '<div class="mip-note">' + info.note + '</div>' : '');
+  }
+  function initModelInfoButton() {
+    var btn = $('modelInfoBtn'), pop = $('modelInfoPop'); if (!btn || !pop) return;
+    btn.onclick = function (e) {
+      e.stopPropagation();
+      var open = pop.hidden;
+      pop.hidden = !open;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    pop.onclick = function (e) { e.stopPropagation(); }; // selecting the text shouldn't close it
   }
 
   // ---- Contact conditioning (the daslab-specialist pipeline) ----
@@ -2042,6 +2116,7 @@
   _backendHydrating = !!(API && authHeader());
   render();
   initAdvancedForm();
+  initModelInfoButton();
   loadAvailableModels();
   // Resume polling for any job that was still running when the page last closed/reloaded --
   // otherwise a restored "running" badge would just sit there stale forever, since nothing else

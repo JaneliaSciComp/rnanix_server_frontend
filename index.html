@@ -52,10 +52,19 @@
   <!-- ============ CHAT COLUMN ============ -->
   <section class="chatcol">
     <div class="chat-head">
+      <a class="atlas-nav-btn" href="/" title="Back to the RNA Atlas structure browser">&larr; Atlas</a>
       <div class="cht" id="chatTitle">1EHZ tRNA · color by chain</div>
-      <select class="model-select" id="modelSelect" title="Backend model used for predictions">
-        <option value="">Protenix v1.1</option>
-      </select>
+      <span class="model-select-wrap">
+        <select class="model-select" id="modelSelect" title="Backend model used for predictions">
+          <option value="">Protenix v1.1</option>
+        </select>
+        <!-- Hidden by default and only unhidden once a selected model has an entry in app.js's
+             MODEL_CHECKPOINT_INFO -- so a model id this table doesn't know about (demo mode, or a
+             future server) just doesn't get the affordance, rather than opening onto nothing. -->
+        <button class="model-info-btn" id="modelInfoBtn" type="button" aria-expanded="false"
+                aria-controls="modelInfoPop" title="Which checkpoint(s) this server runs" hidden>!</button>
+        <div class="model-info-pop" id="modelInfoPop" hidden></div>
+      </span>
       <button class="adv-toggle" id="advToggle" aria-expanded="false" aria-controls="advPanel"
               title="Manual sampling controls for power users — seeds and samples per seed">Advanced form ⌄</button>
     </div>
