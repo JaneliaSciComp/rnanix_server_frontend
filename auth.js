@@ -37,6 +37,7 @@
   // original stays valid, ~30 days by default), so refreshSession() must pass the existing one
   // through explicitly here or it would get silently wiped on every renewal.
   function saveSession(auth, email, refreshToken) {
+    setIdTokenCookie(auth.IdToken, auth.ExpiresIn || 3600);
     storage.setItem(SESSION_KEY, JSON.stringify({
       idToken: auth.IdToken, accessToken: auth.AccessToken,
       refreshToken: auth.RefreshToken || refreshToken,
@@ -48,7 +49,16 @@
     try { return JSON.parse(storage.getItem(SESSION_KEY) || 'null'); } catch (e) { return null; }
   }
 
-  function clearSession() { storage.removeItem(SESSION_KEY); }
+  function clearSession() { storage.removeItem(SESSION_KEY); setIdTokenCookie('', 0); }
+
+  // The ID token is also written to a host-scoped cookie, so an edge check (e.g. a CloudFront
+  // Lambda@Edge in front of a site that serves its own login page on top of this file) can verify
+  // every request, including ones for pages that never load auth.js. RNAnix itself still reads the
+  // token from localStorage. Max-Age tracks the token's own lifetime, so the edge never sees a
+  // cookie outliving its token.
+  function setIdTokenCookie(idToken, maxAgeSeconds) {
+    document.cookie = 'id_token=' + idToken + '; Path=/; Secure; SameSite=Lax; Max-Age=' + maxAgeSeconds;
+  }
 
   // The ID/access token dies after ~1 hour (Cognito default); the refresh token that was sitting
   // in the session unused until now is normally good for ~30 days. Silently trades the former for

@@ -91,6 +91,16 @@ and "Accept invite" panes are wired to real `InitiateAuth` / `RespondToAuthChall
 </script>
 ```
 
+#### Gating another site with this login
+
+Another site can serve its own login page on top of an unmodified copy of `auth.js`, with its
+own `COGNITO_CLIENT_ID`, and gate every request at the edge instead of in page code. RNAnix's
+`login.html` is RNAnix-branded, so each site writes its own page.
+
+- After sign-in and every silent refresh, `auth.js` also writes the ID token to an `id_token`
+  cookie (`Path=/; Secure; SameSite=Lax`, `Max-Age` equal to the token's lifetime). Logout clears
+  it. The cookie is host-scoped, so each site serves its own copy of `auth.js`.
+
 There is no self-service sign-up. `scripts/invite_user.sh <email>` in `rna-atlas-inference`
 creates a Cognito user (`AdminCreateUser`), which emails them a temporary password; their first
 sign-in is forced through `NEW_PASSWORD_REQUIRED`, which routes straight into the "Accept invite"
