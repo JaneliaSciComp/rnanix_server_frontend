@@ -62,16 +62,24 @@
 
 <!-- Only auth.js here, deliberately: this page (plus auth.js + style.css) is the one thing the
      edge gate serves to visitors who are NOT logged in, so it must not pull in app.js -- both to
-     keep the un-authenticated surface minimal and because app.js does nothing on this page. -->
+     keep the un-authenticated surface minimal and because app.js does nothing on this page.
+     NOTE: in production this file is served from the SITE ROOT as /login (-> the /login.html
+     object), not from /inference/. The deploy script rewrites the two relative asset refs
+     (style.css above, auth.js below) to /inference/style.css and /inference/auth.js -- at the
+     root, a relative style.css would be the Atlas landing page's stylesheet and auth.js would
+     not exist. Relative here keeps `python3 -m http.server` from the repo root working. -->
 <script src="auth.js"></script>
 <script>
 // ?next= is set by the edge gate: the same-origin path the visitor originally asked for ("/",
 // "/v0/inference/", ...). Only an absolute path on THIS origin is honoured -- never a full URL,
-// never "//host", never the login page itself -- so this cannot become an open redirect.
+// never "//host", never the login page itself (/login or /login.html would loop) -- so this
+// cannot become an open redirect. With no usable next (someone opened /login directly), go to
+// the app: this page is served from the site root, so a relative default would land on the Atlas
+// landing page instead.
 function safeNext() {
   var n = new URLSearchParams(location.search).get('next') || '';
-  if (/^\/(?!\/)[^\\\s]*$/.test(n) && !/login\.html/.test(n)) return n;
-  return 'index.html';
+  if (/^\/(?!\/)[^\\\s]*$/.test(n) && !/^\/login(\.html)?([?#\/]|$)/.test(n) && !/login\.html/.test(n)) return n;
+  return '/inference/';
 }
 
 // Someone with a still-valid session in this browser (or a live refresh token) never needs the

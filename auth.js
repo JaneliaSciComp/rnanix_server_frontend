@@ -22,6 +22,13 @@
   // one session; unset = host-only cookie, which is right for local dev.
   var COOKIE_NAME = 'rnanix_id';
   var COOKIE_DOMAIN = window.AUTH_COOKIE_DOMAIN || '';
+  // The site-root login page. Absolute, because index.html lives under /inference/ while the
+  // login page is served at /login (the edge gate rewrites that to the /login.html object). Every
+  // bounce carries ?next= so the visitor comes back to the page they were on after signing in.
+  var LOGIN_PATH = '/login';
+  function goLogin() {
+    location.href = LOGIN_PATH + '?next=' + encodeURIComponent(location.pathname + location.search);
+  }
   // localStorage, not sessionStorage: sessionStorage is scoped to one browsing-context/tab, so a
   // session saved in tab A is invisible to a brand-new tab B on the same origin -- requireAuth()
   // in B sees no session at all and bounces to login.html, even seconds after logging in in A.
@@ -120,7 +127,7 @@
     return j.AuthenticationResult;
   }
 
-  function logout() { clearSession(); location.href = 'login.html'; }
+  function logout() { clearSession(); goLogin(); }
 
   // Called at the top of index.html. No-op (returns true) when Cognito isn't configured, so the
   // mockup keeps working with no auth at all — same "unconfigured = demo mode" convention as
@@ -128,13 +135,13 @@
   function requireAuth() {
     if (!configured()) return true;
     var s = getSession();
-    if (!s) { location.href = 'login.html'; return false; }
+    if (!s) { goLogin(); return false; }
     if (Date.now() > s.expiresAt) {
-      if (!s.refreshToken) { location.href = 'login.html'; return false; }
+      if (!s.refreshToken) { goLogin(); return false; }
       // Stays synchronous (no flash-of-unauthenticated-content regression, no blocking network
       // call in <head>): render optimistically, renew in the background, and only bounce to
       // login from here if the refresh token itself turns out to be dead too.
-      refreshSession().then(function (ok) { if (!ok) location.href = 'login.html'; });
+      refreshSession().then(function (ok) { if (!ok) goLogin(); });
     } else if (!hasCookie()) {
       setCookie(s.idToken, s.expiresAt);   // session predates the cookie mirror -- backfill it
     }
