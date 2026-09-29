@@ -1740,7 +1740,12 @@
   function mapPredictStatus(j) {
     var st = j.stages || {}, nm = st.nomsa || {}, ms = st.msa || {};
     var hasResult = nm.url || nm.cif || ms.url || ms.cif;
-    return { state: j.state || 'unknown', error: j.error, nomsa: nm, msa: ms, done: j.state === 'done' || !!hasResult };
+    // relax:"pending" means the backend found real, finalized picks in S3 (Finalize writes its
+    // manifest BEFORE RelaxPicks runs) while the execution is still genuinely running -- a real
+    // result exists, but it is not the final word yet, so this must not count as done.
+    var relaxPending = nm.relax === 'pending' || ms.relax === 'pending';
+    return { state: j.state || 'unknown', error: j.error, nomsa: nm, msa: ms,
+             done: (j.state === 'done' || !!hasResult) && !relaxPending };
   }
   function addPredictionLayer(text, label, ranks) {
     var fmt = fmtOf(text);
@@ -1769,9 +1774,30 @@
   // card (a chat tool-card being live-updated) is optional -- resuming a poll for a job
   // restored from localStorage after a reload has no in-flight chat message to mutate, only
   // the jobs-panel entry (registerJob/updateJob), which always gets tracked either way.
+  // Adaptive backoff, not a fixed interval: most jobs (ptnx1/specialist) finish in well under
+  // 2 minutes, so poll fast there; fleet/base/v0 jobs on larger or multi-checkpoint targets have
+  // been observed taking over an hour (real PreCASP benchmark data), so easing off to 15s then
+  // 30s keeps a multi-hour job from hammering /status the whole time it runs.
+  function pollIntervalMs(elapsedMs) {
+    if (elapsedMs < 2 * 60 * 1000) return 3000;
+    if (elapsedMs < 30 * 60 * 1000) return 15000;
+    return 30000;
+  }
+  // card (a chat tool-card being live-updated) is optional -- resuming a poll for a job
+  // restored from localStorage after a reload has no in-flight chat message to mutate, only
+  // the jobs-panel entry (registerJob/updateJob), which always gets tracked either way.
   async function pollPrediction(jobId, t, card, model) {
     registerJob(t, jobId, { model: model });
-    for (var i = 0; i < 300; i++) {
+    var startTime = Date.now();
+    var interimShown = false;  // relax:"pending" result already loaded into the viewer once
+    // 4h, not the old 15-minute/300-iteration cap: SageMaker jobs here are provisioned for up to
+    // 48h, and real fleet/base/v0 runs on larger targets have taken well over an hour -- the old
+    // cap silently stopped auto-polling (and thus auto-loading the result) for exactly the jobs
+    // where a user is most likely to have wandered off and come back expecting it to "just be
+    // there". resumeJobPolling() restarts this fresh on every page load regardless, so this is
+    // the ceiling for one continuously-open tab, not the ceiling on ever finding out a job is done.
+    var MAX_POLL_MS = 4 * 60 * 60 * 1000;
+    while (Date.now() - startTime < MAX_POLL_MS) {
       var j;
       try { j = await (await fetch(API + '/status?job=' + encodeURIComponent(jobId) + (tok() ? '&t=' + encodeURIComponent(tok()) : ''))).json(); }
       catch (e) { if (card) card.result = 'status check failed: ' + e.message; render(); return; }
@@ -1787,6 +1813,14 @@
       if (card) updateCardResult(t, card);
       saveThreads();
       var stage = (m.msa && (m.msa.url || m.msa.cif)) ? m.msa : ((m.nomsa && (m.nomsa.url || m.nomsa.cif)) ? m.nomsa : null);
+      // relax:"pending" already showed once this call -- the underlying structure won't change
+      // again until relax actually finishes (a new poll tick with the same "pending" flag is
+      // just the pipeline still working), so skip re-fetching/re-rendering it every 3-30s and
+      // just keep polling for the real finish.
+      if (stage && stage.relax === 'pending' && interimShown) {
+        await new Promise(function (res) { setTimeout(res, pollIntervalMs(Date.now() - startTime)); });
+        continue;
+      }
       if (stage) {
         var text;
         try { text = await fetchStageResult(stage); }
@@ -1794,17 +1828,30 @@
         var jobName = (t.title !== 'New chat' && t.title) || jobId;
         await addPredictionLayer(text, jobName + ' (prediction)', stage.ranks);
         t.pdb = null; t.structure = jobName + ' (prediction)'; t.lastJobId = jobId; curJobId = jobId;
+        if (stage.relax === 'pending') {
+          // Real, usable structure -- but relax hasn't finished, so don't mark the job done or
+          // stop polling; the client keeps checking and will swap in the relaxed version (fewer
+          // steric clashes) once it lands.
+          interimShown = true;
+          if (card) card.result = 'folded — relaxing…';
+          t.msgs.push({ role: 'assistant', text: 'The fold finished and is loaded in the viewer (job ' + jobId + ') — structure relaxation is still running and will refine it automatically when done.' });
+          render();
+          await new Promise(function (res) { setTimeout(res, pollIntervalMs(Date.now() - startTime)); });
+          continue;
+        }
         if (card) card.result = 'done — structure loaded in the viewer';
         updateJob(t, jobId, { state: 'done' });
-        t.msgs.push({ role: 'assistant', text: 'Done — that\'s a real predicted structure from the AWS pipeline, loaded in the viewer on the right (job ' + jobId + ').' });
+        t.msgs.push({ role: 'assistant', text: stage.relax === 'failed'
+          ? 'Done — structure loaded in the viewer (job ' + jobId + '). Note: structure relaxation did not complete for this run, so this is the raw (unrelaxed) fold.'
+          : 'Done — that\'s a real predicted structure from the AWS pipeline, loaded in the viewer on the right (job ' + jobId + ').' });
         render();
         showPredictionBrief(jobId, t);
         return;
       }
       if (m.done) { updateJob(t, jobId, { state: 'done' }); render(); return; }
-      await new Promise(function (res) { setTimeout(res, 3000); });
+      await new Promise(function (res) { setTimeout(res, pollIntervalMs(Date.now() - startTime)); });
     }
-    updateJob(t, jobId, { state: 'error', error: 'client-side poll gave up after ~15 minutes' });
+    updateJob(t, jobId, { state: 'error', error: 'client-side poll gave up after ~4 hours' });
     t.msgs.push({ role: 'assistant', text: 'This prediction is taking longer than expected — job ' + jobId + ' is still running on the backend.' });
     render();
   }
