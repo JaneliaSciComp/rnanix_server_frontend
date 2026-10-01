@@ -111,15 +111,19 @@
       <div class="input-toolbar">
         <button class="input-tool-btn" id="entityBtn" title="Build a multi-entity structure (RNA / protein / DNA / ligand)">Include sequence</button>
         <div class="attach-wrap">
-          <button class="input-tool-btn" id="attachBtn" title="Add chemical mapping, MoHCA-seq, templates, or an MSA as conditioning">Add conditioners</button>
+          <button class="input-tool-btn" id="attachBtn" title="Add chemical mapping, MoHCA-seq, templates, or an MSA as conditioning — or upload your own structure file / paper">Add conditioners</button>
           <div class="attach-menu" id="attachMenu" hidden>
             <button data-tab="data" data-attach="chem">Chemical mapping (1D)</button>
             <button data-tab="data" data-attach="mohca">MoHCA-seq (2D)</button>
             <button data-tab="templates" data-attach="templates">Templates</button>
             <button data-tab="msa" data-attach="msa">MSA</button>
+            <!-- Real uploads (bytes -> S3 via uploads.js), not text pasted into a tab. -->
+            <button data-upload="template" title="Your own .pdb/.cif — aligned per chain and fed to the fold as a 3D template (template-capable models only)">Upload structure as template (.pdb/.cif)</button>
+            <button data-upload="paper" title="A paper (even paywalled) for the research step">Upload paper (.pdf)</button>
           </div>
         </div>
       </div>
+      <div class="attach-chips" id="attachChips" hidden><!-- filled by app.js renderAttachChips --></div>
       <div class="inputbox">
         <textarea id="msgInput" rows="1" placeholder="Message RNAnix — try “fetch 1EHZ”, “remove water”, “color by chain”, or “predict a structure for this sequence”…"></textarea>
         <button class="send-btn" id="sendBtn" title="Send">Send</button>
@@ -306,6 +310,9 @@
 </div>
 
 <input type="file" id="fileHidden" hidden accept=".txt,.csv,.fasta,.fa">
+<!-- Binary uploads (structure files as templates, papers); #fileHidden above stays text-only. -->
+<input type="file" id="fileUploadHidden" hidden accept=".pdb,.ent,.cif,.mmcif,.pdf">
+<script src="uploads.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

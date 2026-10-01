@@ -911,7 +911,13 @@
   }
   $('attachBtn').onclick = function (e) { e.stopPropagation(); $('attachMenu').hidden = !$('attachMenu').hidden; };
   $('attachMenu').querySelectorAll('button').forEach(function (b) {
-    b.onclick = function () { $('attachMenu').hidden = true; switchTab(b.dataset.tab); attachToChat(b.dataset.attach); $('msgInput').focus(); };
+    b.onclick = function () {
+      $('attachMenu').hidden = true;
+      // The two upload items (structure file as template, paper) open the binary file picker --
+      // real bytes to S3 via uploads.js -- rather than pasting text into a tab like the rest.
+      if (b.dataset.upload) { pickUpload(b.dataset.upload); return; }
+      switchTab(b.dataset.tab); attachToChat(b.dataset.attach); $('msgInput').focus();
+    };
   });
 
   // ================= ChemMap (1D) — real parser + renderer =================
@@ -1155,6 +1161,90 @@
     r.readAsText(f); e.target.value = '';
   };
 
+  // ================= binary uploads: structure files as fold templates, papers =================
+  // rna-atlas-inference/lambda_src/bridge/USER-UPLOADS.md. The bytes go browser -> S3 via a
+  // presigned PUT (uploads.js); only METADATA lives here: t.attachments = [{upload_id, kind,
+  // name, size, status, created, summary}], persisted with the thread (localStorage +
+  // /discussions -- a few hundred bytes each) and sent to /chat as `attachments` so Claude can
+  // use a template via submit_prediction.template_upload_ids. Nothing about a file ever rides in
+  // a chat message except the one-line text marker inserted below.
+  var UPLOAD_CAPS = null;   // GET /models' `uploads` block: per-kind caps + template-capable models
+  var _uploadKind = null;
+  function pickUpload(kind) {
+    var inp = $('fileUploadHidden'); if (!inp) return;
+    if (!API) { toast('Uploads need the real backend — this is the offline demo.'); return; }
+    _uploadKind = kind;
+    inp.accept = (window.RNAnixUploads && RNAnixUploads.ACCEPT[kind]) || '';
+    inp.click();
+  }
+  if ($('fileUploadHidden')) {
+    $('fileUploadHidden').onchange = function (e) {
+      var f = e.target.files[0]; e.target.value = '';
+      if (f) uploadAttachment(f, _uploadKind);
+    };
+  }
+  async function uploadAttachment(file, kind) {
+    var t = currentThread();
+    var att = { upload_id: null, kind: kind || RNAnixUploads.kindForFile(file.name), name: file.name, size: file.size, status: 'init' };
+    t.attachments = t.attachments || [];
+    t.attachments.push(att);
+    renderAttachChips(t);
+    try {
+      var meta = await RNAnixUploads.uploadFile({
+        api: API, apiFetch: apiFetch, fetchImpl: fetch, file: file, kind: att.kind, caps: UPLOAD_CAPS,
+        onStage: function (s) { att.status = s; renderAttachChips(t); }
+      });
+      Object.assign(att, meta, { status: 'ready', created: Date.now() });
+      // A one-line text marker so the conversation history reads correctly (for the user and for
+      // Claude); the summary comes from the server's parse, not from the browser.
+      var cur = $('msgInput').value;
+      $('msgInput').value = RNAnixUploads.markerText(att) + (cur.trim() ? '\n\n' + cur : '\n\n');
+      var warn = att.kind === 'template' && !modelIsTemplateCapable(SELECTED_MODEL);
+      toast('Attached ' + att.name + (warn ? ' — switch to a template-capable model before folding with it' : ''));
+    } catch (err) {
+      // Rejected (bad file, over the cap, S3 refused): drop the chip and put the server's reason
+      // in the chat, where the user is looking.
+      t.attachments = t.attachments.filter(function (a) { return a !== att; });
+      t.msgs.push({ role: 'assistant', error: true, text: 'Could not attach ' + file.name + ': ' + err.message });
+    }
+    render();
+  }
+  function removeAttachment(t, att) {
+    t.attachments = (t.attachments || []).filter(function (a) { return a !== att; });
+    render();
+    if (att.upload_id && API) RNAnixUploads.removeUpload(apiFetch, API, att.upload_id).catch(function () { /* best-effort; it expires anyway */ });
+  }
+  // What /chat gets: ids + kinds of the READY attachments only. Re-sent on every round like `options`.
+  function chatAttachments(t) {
+    return ((t && t.attachments) || []).filter(function (a) { return a.status === 'ready' && a.upload_id; })
+      .map(function (a) { return { upload_id: a.upload_id, kind: a.kind }; });
+  }
+  function renderAttachChips(t) {
+    var wrap = $('attachChips'); if (!wrap) return;
+    if (t === undefined) t = THREADS.filter(function (x) { return x.id === curId; })[0];
+    var atts = (t && t.attachments) || [];
+    wrap.hidden = !atts.length;
+    var capable = (UPLOAD_CAPS && UPLOAD_CAPS.template_models && UPLOAD_CAPS.template_models.join(' / ')) || 'a template-capable model';
+    wrap.innerHTML = atts.map(function (a, i) {
+      var busy = a.status !== 'ready';
+      // The bridge REJECTS a template on a model that cannot consume one (never runs without it),
+      // so say so here, before the user hits Send -- a quiet "it was ignored" is the failure mode
+      // this whole feature is built to avoid.
+      var warn = !busy && a.kind === 'template' && !modelIsTemplateCapable(SELECTED_MODEL);
+      var sub = busy ? ({ init: 'preparing…', put: 'uploading…', complete: 'checking the file…' }[a.status] || 'working…')
+                     : RNAnixUploads.summaryText(a);
+      if (warn) sub += ' · not used by “' + SELECTED_MODEL + '” — select ' + capable;
+      return '<span class="attach-chip' + (warn ? ' warn' : '') + (busy ? ' busy' : '') + '" title="' + escapeHtml(a.name) + (UPLOAD_CAPS && UPLOAD_CAPS.retention_days ? ' · kept ' + UPLOAD_CAPS.retention_days + ' days' : '') + '">'
+        + '<span class="chip-kind">' + (a.kind === 'paper' ? 'PDF' : 'TPL') + '</span> <b>' + escapeHtml(a.name) + '</b> '
+        + '<span class="chip-sub">' + escapeHtml(sub) + '</span>'
+        + (busy ? '' : '<button class="chip-x" data-i="' + i + '" title="Detach and delete this upload">&times;</button>')
+        + '</span>';
+    }).join('');
+    wrap.querySelectorAll('.chip-x').forEach(function (b) {
+      b.onclick = function () { removeAttachment(t, atts[parseInt(b.dataset.i, 10)]); };
+    });
+  }
+
   // ================= chat: canned history threads =================
   var EXAMPLE_CARDS = [
     "Fetch 1EHZ from the PDB and color by chain",
@@ -1302,6 +1392,7 @@
     renderHistory();
     renderExamples();
     renderJobsPanel(t);
+    renderAttachChips(t);
     if (!t) {
       $('chatTitle').textContent = 'New chat';
       // Pinned layers (see toggleLayerPinned) survive going to "New chat" too -- pinning means
@@ -1379,7 +1470,11 @@
       if (API && parsed.every(function (t) { return CANNED_DEMO_IDS[t.id]; })) return null;
       // A "pending" bubble persisted mid-request (reload/crash before the /chat response landed)
       // would otherwise sit stuck forever -- nothing resumes it, unlike jobs' poll-on-load below.
-      parsed.forEach(function (t) { t.msgs = (t.msgs || []).filter(function (m) { return !m.pending; }); });
+      parsed.forEach(function (t) {
+        t.msgs = (t.msgs || []).filter(function (m) { return !m.pending; });
+        // Same idea for an attachment saved mid-upload: nothing resumes it, so drop it.
+        if (t.attachments) t.attachments = t.attachments.filter(function (a) { return a.status === 'ready' && a.upload_id; });
+      });
       return parsed;
     } catch (e) { return null; }
   }
@@ -1429,7 +1524,10 @@
         // debounce is the common case, not an edge case), persisting the pending bubble to the
         // backend. Without this, restoring that snapshot on the NEXT load undoes the local fix
         // and leaves "thinking" stuck forever, since nothing ever resumes an abandoned /chat call.
-        j.threads.forEach(function (t) { t.msgs = (t.msgs || []).filter(function (m) { return !m.pending; }); });
+        j.threads.forEach(function (t) {
+          t.msgs = (t.msgs || []).filter(function (m) { return !m.pending; });
+          if (t.attachments) t.attachments = t.attachments.filter(function (a) { return a.status === 'ready' && a.upload_id; });
+        });
         THREADS = j.threads;
         if (!THREADS.some(function (t) { return t.id === curId; })) curId = THREADS[0].id;
         render();
@@ -1500,6 +1598,7 @@
       var r = await apiFetch(API + '/models');
       var j = await r.json();
       AVAILABLE_MODELS = j.models || j || [];
+      UPLOAD_CAPS = (j && j.uploads) || null;
       if (AVAILABLE_MODELS.length) {
         DEFAULT_MODEL = AVAILABLE_MODELS[0].id || AVAILABLE_MODELS[0];
         SELECTED_MODEL = DEFAULT_MODEL;
@@ -1517,6 +1616,7 @@
       SELECTED_MODEL = sel.value;
       syncContactPanel();
       renderModelInfo();
+      renderAttachChips();
       toast('New predictions will use "' + sel.value + '".');
     };
     syncContactPanel();
@@ -1604,6 +1704,16 @@
     for (var i = 0; i < AVAILABLE_MODELS.length; i++) {
       var m = AVAILABLE_MODELS[i];
       if ((m.id || m) === id) return !!m.contact;
+    }
+    return false;
+  }
+  // Which models consume an uploaded structure file as a 3D template: /models marks them
+  // template:true (today only daslab-fleet-v1arch), so nothing here hardcodes a model id.
+  function modelIsTemplateCapable(id) {
+    if (!AVAILABLE_MODELS) return false;
+    for (var i = 0; i < AVAILABLE_MODELS.length; i++) {
+      var m = AVAILABLE_MODELS[i];
+      if ((m.id || m) === id) return !!m.template;
     }
     return false;
   }
@@ -2028,7 +2138,7 @@
     // the response lands.
     var pending = { role: 'assistant', pending: true };
     t.msgs.push(pending); render();
-    var body = { messages: buildChatMessages(t), model: SELECTED_MODEL, options: advValues() };
+    var body = { messages: buildChatMessages(t), model: SELECTED_MODEL, options: advValues(), attachments: chatAttachments(t) };
     var j, allToolCalls = [], allThinking = [];
     // Bounded round-trip loop: each POST either finishes (a reply) or pauses on a client tool
     // (get_structure_data etc.) that only the browser can execute -- see casp_web.py's _chat().
@@ -2066,7 +2176,7 @@
       render();
       // options re-sent on every round: _chat threads them per-request, so a turn that resumes
       // after a client tool must carry them again or its submit_prediction reverts to defaults.
-      body = { convo: j.convo, extra_tool_results: (j.resolved_tool_results || []).concat(clientResults), model: SELECTED_MODEL, options: advValues() };
+      body = { convo: j.convo, extra_tool_results: (j.resolved_tool_results || []).concat(clientResults), model: SELECTED_MODEL, options: advValues(), attachments: chatAttachments(t) };
     }
     var idxDone = t.msgs.indexOf(pending);
     if (idxDone !== -1) t.msgs.splice(idxDone, 1);

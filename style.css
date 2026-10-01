@@ -498,6 +498,22 @@ button { font-family: inherit; cursor: pointer; }
 }
 .attach-menu button:hover { background: var(--bg-hover); }
 
+/* ---- attachment chips: uploaded structure files / papers (app.js renderAttachChips) ---- */
+.attach-chips { display: flex; flex-wrap: wrap; gap: 6px; max-width: 900px; margin: 0 auto 8px; padding: 0 8px; }
+.attach-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  font-size: 12px; color: var(--text); background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 999px; padding: 5px 8px 5px 10px;
+}
+.attach-chip b { font-weight: 600; white-space: nowrap; }
+.attach-chip .chip-kind { font-size: 10px; font-weight: 700; letter-spacing: .04em; color: var(--accent); }
+.attach-chip .chip-sub { color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 48ch; }
+.attach-chip.warn { border-color: #c98a2b; }
+.attach-chip.warn .chip-sub { color: #e0a84a; }
+.attach-chip.busy { opacity: .7; }
+.attach-chip .chip-x { background: none; border: none; color: var(--text-muted); font-size: 15px; line-height: 1; padding: 0 2px; cursor: pointer; }
+.attach-chip .chip-x:hover { color: var(--text); }
+
 /* ---- download split button ---- */
 .dl-wrap { position: relative; display: flex; }
 .dl-main {
