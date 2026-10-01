@@ -79,6 +79,12 @@
     return 'reading the paper…';
   }
 
+  // Re-fire a failed or stalled paper digest: POST /upload/complete on an already-complete upload
+  // is the bridge's retry path (idempotent otherwise). Resolves to the fresh public metadata.
+  async function retryDigest(apiFetch, api, uploadId) {
+    return jsonPost(apiFetch, api + '/upload/complete', { upload_id: uploadId });
+  }
+
   async function removeUpload(apiFetch, api, uploadId) {
     var r = await apiFetch(api + '/upload?id=' + encodeURIComponent(uploadId), { method: 'DELETE' });
     return !!r.ok;
@@ -108,5 +114,5 @@
 
   root.RNAnixUploads = { kindForFile: kindForFile, extOf: extOf, ACCEPT: ACCEPT, uploadFile: uploadFile,
     removeUpload: removeUpload, summaryText: summaryText, markerText: markerText,
-    fetchUploadStatus: fetchUploadStatus, digestLabel: digestLabel };
+    fetchUploadStatus: fetchUploadStatus, digestLabel: digestLabel, retryDigest: retryDigest };
 })(typeof window !== 'undefined' ? window : globalThis);

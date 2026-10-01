@@ -141,3 +141,11 @@ test('fetchUploadStatus GETs /upload?id= and surfaces the bridge error on a 404'
   assert.equal(j.digest_status, 'ready');
   await assert.rejects(U.fetchUploadStatus(h.apiFetch, 'https://api.test', 'x'), /unknown upload id/);
 });
+
+test('retryDigest re-completes the upload, which is the bridge retry path', async () => {
+  const U = sandbox().RNAnixUploads;
+  const h = harness([(url, init) => { assert.equal(init.method, 'POST'); assert.deepEqual(JSON.parse(init.body), { upload_id: 'e'.repeat(32) }); return response(200, { digest_status: 'pending' }); }]);
+  const j = await U.retryDigest(h.apiFetch, 'https://api.test', 'e'.repeat(32));
+  assert.equal(h.calls[0].url, 'https://api.test/upload/complete');
+  assert.equal(j.digest_status, 'pending');
+});

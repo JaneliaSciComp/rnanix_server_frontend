@@ -1410,6 +1410,9 @@
         sub += ' · ' + RNAnixUploads.digestLabel(a);
         if (a.digest_status !== 'ready' && a.digest_status !== 'failed') watchDigest(t, a);
       }
+      var retryBtn = (!busy && a.kind === 'paper' && a.digest_status === 'failed')
+        ? '<button class="chip-toggle" data-retry="' + i + '" title="Read the paper again (the digest failed or timed out)">retry</button>'
+        : '';
       var fullToggle = (!busy && a.kind === 'paper')
         ? '<button class="chip-toggle' + (a.attach_full_pdf ? ' on' : '') + '" data-full="' + i + '" title="' + (a.attach_full_pdf
             ? 'Research will also read the full PDF (roughly 3,000–4,500 tokens per page per call). Click to use the digest only.'
@@ -1418,18 +1421,30 @@
       return '<span class="attach-chip' + (warn ? ' warn' : '') + (busy ? ' busy' : '') + '" title="' + escapeHtml(a.name) + (UPLOAD_CAPS && UPLOAD_CAPS.retention_days ? ' · kept ' + UPLOAD_CAPS.retention_days + ' days' : '') + '">'
         + '<span class="chip-kind">' + (a.kind === 'paper' ? 'PDF' : 'TPL') + '</span> <b>' + escapeHtml(a.name) + '</b> '
         + '<span class="chip-sub">' + escapeHtml(sub) + '</span>'
-        + fullToggle
+        + retryBtn + fullToggle
         + (busy ? '' : '<button class="chip-x" data-i="' + i + '" title="Detach and delete this upload">&times;</button>')
         + '</span>';
     }).join('');
     wrap.querySelectorAll('.chip-x').forEach(function (b) {
       b.onclick = function () { removeAttachment(t, atts[parseInt(b.dataset.i, 10)]); };
     });
-    wrap.querySelectorAll('.chip-toggle').forEach(function (b) {
+    wrap.querySelectorAll('.chip-toggle[data-full]').forEach(function (b) {
       b.onclick = function () {
         var a = atts[parseInt(b.dataset.full, 10)];
         a.attach_full_pdf = !a.attach_full_pdf;
         renderAttachChips(t); saveThreads();
+      };
+    });
+    wrap.querySelectorAll('.chip-toggle[data-retry]').forEach(function (b) {
+      b.onclick = function () {
+        var a = atts[parseInt(b.dataset.retry, 10)];
+        a.digest_status = 'pending'; delete a.digest_error; renderAttachChips(t);
+        RNAnixUploads.retryDigest(apiFetch, API, a.upload_id).then(function (j) {
+          a.digest_status = j.digest_status || 'pending'; if (j.digest_error) a.digest_error = j.digest_error;
+          renderAttachChips(t); saveThreads(); watchDigest(t, a);
+        }).catch(function (err) {
+          a.digest_status = 'failed'; a.digest_error = err.message; renderAttachChips(t);
+        });
       };
     });
   }
