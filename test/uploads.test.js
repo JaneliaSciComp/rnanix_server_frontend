@@ -123,3 +123,21 @@ test('summaryText / markerText describe a structure and a paper from the server 
   assert.equal(U.markerText(paper), '[attached paper: p.pdf -- 12 pages · “Aptamer 1998”]');
   assert.equal(U.summaryText({ kind: 'template', name: 'x.cif', summary: {} }), 'structure file');
 });
+
+test('digestLabel reflects the paper digest lifecycle', () => {
+  const U = sandbox().RNAnixUploads;
+  assert.equal(U.digestLabel({ kind: 'paper', digest_status: 'pending' }), 'reading the paper…');
+  assert.equal(U.digestLabel({ kind: 'paper' }), 'reading the paper…');
+  assert.equal(U.digestLabel({ kind: 'paper', digest_status: 'ready' }), 'digest ready');
+  assert.equal(U.digestLabel({ kind: 'paper', digest_status: 'failed', digest_error: 'encrypted' }), 'digest failed: encrypted');
+});
+
+test('fetchUploadStatus GETs /upload?id= and surfaces the bridge error on a 404', async () => {
+  const U = sandbox().RNAnixUploads;
+  const h = harness([(url, init) => { assert.equal(init, undefined); return response(200, { upload_id: 'd'.repeat(32), digest_status: 'ready' }); },
+                     () => response(404, { error: 'unknown upload id' })]);
+  const j = await U.fetchUploadStatus(h.apiFetch, 'https://api.test', 'd'.repeat(32));
+  assert.equal(h.calls[0].url, 'https://api.test/upload?id=' + 'd'.repeat(32));
+  assert.equal(j.digest_status, 'ready');
+  await assert.rejects(U.fetchUploadStatus(h.apiFetch, 'https://api.test', 'x'), /unknown upload id/);
+});

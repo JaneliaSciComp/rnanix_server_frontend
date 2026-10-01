@@ -62,6 +62,23 @@
     return jsonPost(apiFetch, api + '/upload/complete', { upload_id: init.upload_id });
   }
 
+  // GET /upload?id= -- the owner's metadata, incl. a paper's digest_status (pending|ready|failed).
+  async function fetchUploadStatus(apiFetch, api, uploadId) {
+    var r = await apiFetch(api + '/upload?id=' + encodeURIComponent(uploadId));
+    var j = await r.json().catch(function () { return null; });
+    if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+    return j;
+  }
+  // One phrase for a paper chip's digest state. The digest is what Expert research and the chat
+  // tool read; until it is ready the paper cannot be used (the bridge refuses, rather than
+  // folding without it), so the chip has to say so.
+  function digestLabel(att) {
+    var s = att && att.digest_status;
+    if (s === 'ready') return 'digest ready';
+    if (s === 'failed') return 'digest failed' + (att.digest_error ? ': ' + att.digest_error : '');
+    return 'reading the paper…';
+  }
+
   async function removeUpload(apiFetch, api, uploadId) {
     var r = await apiFetch(api + '/upload?id=' + encodeURIComponent(uploadId), { method: 'DELETE' });
     return !!r.ok;
@@ -90,5 +107,6 @@
   }
 
   root.RNAnixUploads = { kindForFile: kindForFile, extOf: extOf, ACCEPT: ACCEPT, uploadFile: uploadFile,
-    removeUpload: removeUpload, summaryText: summaryText, markerText: markerText };
+    removeUpload: removeUpload, summaryText: summaryText, markerText: markerText,
+    fetchUploadStatus: fetchUploadStatus, digestLabel: digestLabel };
 })(typeof window !== 'undefined' ? window : globalThis);

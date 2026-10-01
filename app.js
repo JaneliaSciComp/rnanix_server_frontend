@@ -1195,6 +1195,7 @@
         onStage: function (s) { att.status = s; renderAttachChips(t); }
       });
       Object.assign(att, meta, { status: 'ready', created: Date.now() });
+      if (att.kind === 'paper') watchDigest(t, att);
       // A one-line text marker so the conversation history reads correctly (for the user and for
       // Claude); the summary comes from the server's parse, not from the browser.
       var cur = $('msgInput').value;
@@ -1217,7 +1218,46 @@
   // What /chat gets: ids + kinds of the READY attachments only. Re-sent on every round like `options`.
   function chatAttachments(t) {
     return ((t && t.attachments) || []).filter(function (a) { return a.status === 'ready' && a.upload_id; })
-      .map(function (a) { return { upload_id: a.upload_id, kind: a.kind }; });
+      .map(function (a) {
+        var out = { upload_id: a.upload_id, kind: a.kind };
+        // The user's per-paper "full PDF" toggle: research also gets the PDF itself (costly;
+        // default off, the digest is what it reads otherwise). The bridge forwards it as
+        // options.attach_full_pdf_ids and it lands in the cache key.
+        if (a.kind === 'paper' && a.attach_full_pdf) out.attach_full_pdf = true;
+        return out;
+      });
+  }
+  // ---- paper digests are produced asynchronously after upload (a minutes-long Claude read of
+  // the PDF); poll GET /upload?id= until the status settles so the chip can say "digest ready"
+  // and the paper becomes usable. One poller per upload, resumed on load for a persisted
+  // "pending" paper (renderAttachChips calls this), capped at 15 minutes. ----
+  var _digestPollers = {};
+  function watchDigest(t, att) {
+    if (!API || !att.upload_id || _digestPollers[att.upload_id]) return;
+    if (att.digest_status === 'ready' || att.digest_status === 'failed') return;
+    var started = Date.now();
+    _digestPollers[att.upload_id] = true;
+    (function tick() {
+      RNAnixUploads.fetchUploadStatus(apiFetch, API, att.upload_id).then(function (j) {
+        att.digest_status = j.digest_status || att.digest_status;
+        if (j.digest_error) att.digest_error = j.digest_error;
+        if (j.digest && j.digest.title) att.summary = Object.assign({}, att.summary || {}, { title: j.digest.title });
+        if (att.digest_status === 'ready' || att.digest_status === 'failed') {
+          delete _digestPollers[att.upload_id];
+          renderAttachChips(); saveThreads();
+          toast(att.name + ': ' + RNAnixUploads.digestLabel(att));
+          return;
+        }
+        if (Date.now() - started > 15 * 60 * 1000) { delete _digestPollers[att.upload_id]; return; }
+        renderAttachChips();
+        setTimeout(tick, 5000);
+      }).catch(function () {
+        // 404 = deleted/expired meanwhile; anything else = transient -- stop either way after a
+        // few quiet minutes rather than hammer a dead id.
+        if (Date.now() - started > 15 * 60 * 1000) { delete _digestPollers[att.upload_id]; return; }
+        setTimeout(tick, 10000);
+      });
+    })();
   }
   function renderAttachChips(t) {
     var wrap = $('attachChips'); if (!wrap) return;
@@ -1234,14 +1274,31 @@
       var sub = busy ? ({ init: 'preparing…', put: 'uploading…', complete: 'checking the file…' }[a.status] || 'working…')
                      : RNAnixUploads.summaryText(a);
       if (warn) sub += ' · not used by “' + SELECTED_MODEL + '” — select ' + capable;
+      if (!busy && a.kind === 'paper') {
+        sub += ' · ' + RNAnixUploads.digestLabel(a);
+        if (a.digest_status !== 'ready' && a.digest_status !== 'failed') watchDigest(t, a);
+      }
+      var fullToggle = (!busy && a.kind === 'paper')
+        ? '<button class="chip-toggle' + (a.attach_full_pdf ? ' on' : '') + '" data-full="' + i + '" title="' + (a.attach_full_pdf
+            ? 'Research will also read the full PDF (roughly 3,000–4,500 tokens per page per call). Click to use the digest only.'
+            : 'Research reads the digest only. Click to also send the full PDF (roughly 3,000–4,500 tokens per page per call).') + '">full PDF</button>'
+        : '';
       return '<span class="attach-chip' + (warn ? ' warn' : '') + (busy ? ' busy' : '') + '" title="' + escapeHtml(a.name) + (UPLOAD_CAPS && UPLOAD_CAPS.retention_days ? ' · kept ' + UPLOAD_CAPS.retention_days + ' days' : '') + '">'
         + '<span class="chip-kind">' + (a.kind === 'paper' ? 'PDF' : 'TPL') + '</span> <b>' + escapeHtml(a.name) + '</b> '
         + '<span class="chip-sub">' + escapeHtml(sub) + '</span>'
+        + fullToggle
         + (busy ? '' : '<button class="chip-x" data-i="' + i + '" title="Detach and delete this upload">&times;</button>')
         + '</span>';
     }).join('');
     wrap.querySelectorAll('.chip-x').forEach(function (b) {
       b.onclick = function () { removeAttachment(t, atts[parseInt(b.dataset.i, 10)]); };
+    });
+    wrap.querySelectorAll('.chip-toggle').forEach(function (b) {
+      b.onclick = function () {
+        var a = atts[parseInt(b.dataset.full, 10)];
+        a.attach_full_pdf = !a.attach_full_pdf;
+        renderAttachChips(t); saveThreads();
+      };
     });
   }
 
