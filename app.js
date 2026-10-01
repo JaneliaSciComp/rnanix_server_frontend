@@ -1799,10 +1799,31 @@
     if (elapsedMs < 30 * 60 * 1000) return 15000;
     return 30000;
   }
+  // One poll loop per (thread, job_id). realChat starts a poller for EVERY submit_prediction
+  // tool call that returns a job_id, and the bridge now hands back the SAME job_id when an
+  // identical prediction is already running (web_bridge._running_execution_name) -- so a user
+  // turn that makes Claude re-call submit_prediction used to spawn a second (and third) loop on
+  // one job, each pushing its own "fold finished" / "Done" and re-loading the viewer. Seen in
+  // production: three pollers, six messages, one structure. In-memory only (not persisted), so
+  // resumeJobPolling() after a reload starts cleanly.
+  // Keyed per thread AND job: registerJob/updateJob are per-thread, so if the bridge dedups a
+  // submission from a different discussion onto the same job_id, that discussion still needs
+  // its own loop to keep its jobs panel live -- only a repeat inside one thread is redundant.
+  var _activePolls = {};
+  async function pollPrediction(jobId, t, card, model) {
+    var key = t.id + '|' + jobId;
+    if (_activePolls[key]) {
+      if (card) { card.result = 'already running — tracking job ' + jobId; updateCardResult(t, card); render(); }
+      return;
+    }
+    _activePolls[key] = true;
+    try { await pollPredictionLoop(jobId, t, card, model); }
+    finally { delete _activePolls[key]; }
+  }
   // card (a chat tool-card being live-updated) is optional -- resuming a poll for a job
   // restored from localStorage after a reload has no in-flight chat message to mutate, only
   // the jobs-panel entry (registerJob/updateJob), which always gets tracked either way.
-  async function pollPrediction(jobId, t, card, model) {
+  async function pollPredictionLoop(jobId, t, card, model) {
     registerJob(t, jobId, { model: model });
     var startTime = Date.now();
     var interimShown = false;  // relax:"pending" result already loaded into the viewer once
