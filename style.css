@@ -661,6 +661,34 @@ details.reasoning summary::-webkit-details-marker { display: none; }
 .tpl-meta { font-size: 11.5px; color: var(--text-dim); margin-bottom: 10px; }
 .tpl-actions { display: flex; gap: 8px; }
 .tpl-actions a.mini-btn { text-decoration: none; }
+/* real three-mode tab (templates.js cardsHtml): empty state, mode line, user-upload cards,
+   "proposed, not used" chips, the "Sources Claude read" list, RCSB primary-citation line */
+.tpl-card.upload, .tpl-card.unrecognised { border-style: dashed; }
+.tpl-card.proposed { border-color: var(--border); }
+.tpl-card.proposed .tpl-used-badge { color: var(--text-muted); background: var(--bg-panel); }
+.tpl-hint { font-style: italic; }
+.tpl-chain { font-size: 11px; color: var(--text-muted); background: var(--bg-panel); border: 1px solid var(--border); padding: 1px 7px; border-radius: 999px; }
+.tpl-lines { line-height: 1.6; }
+.tpl-empty { font-size: 12px; color: var(--text-dim); padding: 10px 0; line-height: 1.5; }
+.tpl-mode { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+.tpl-note { font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
+.tpl-cite { font-size: 11.5px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.5; }
+.tpl-cite a { color: var(--text-muted); text-decoration: underline dotted; }
+.tpl-cite a:hover { color: var(--accent); }
+.tpl-sec { border-top: 1px solid var(--border-soft); padding-top: 10px; }
+.tpl-sec-h { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+.tpl-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.tpl-chip { font-size: 11px; color: var(--text-muted); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 999px; padding: 3px 9px; text-decoration: none; }
+.tpl-chip:hover { color: var(--accent); border-color: var(--accent-dim); }
+.tpl-chip.muted { color: var(--text-dim); border-style: dashed; background: transparent; }
+.tpl-src-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.tpl-src-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; color: var(--text-muted); }
+.tpl-src-list a { color: var(--text); text-decoration: none; }
+.tpl-src-list a:hover { color: var(--accent); }
+.tpl-src-kind { font-size: 10px; color: var(--accent); background: var(--accent-soft); padding: 1px 6px; border-radius: 999px; }
+.tpl-src-host { font-size: 11px; color: var(--text-dim); }
+.tpl-upload-name { color: var(--text); }
+.tpl-upload-chains { font-size: 11px; color: var(--text-dim); }
 
 /* ---- vtabs: allow wrapping now that there are 6 of them ---- */
 .vtabs { flex-wrap: wrap; }

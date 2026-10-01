@@ -267,6 +267,8 @@
 
     <!-- ---- Templates tab ---- -->
     <div class="tabpanel" data-panel="templates">
+      <!-- filled by app.js renderTemplates() at init and on every open, from the current thread's
+           /brief data (templates.js); with no job it renders the mode-"none" empty state -->
       <div class="tpl-wrap" id="tplWrap"></div>
     </div>
 
@@ -313,6 +315,8 @@
 <!-- Binary uploads (structure files as templates, papers); #fileHidden above stays text-only. -->
 <input type="file" id="fileUploadHidden" hidden accept=".pdb,.ent,.cif,.mmcif,.pdf">
 <script src="uploads.js"></script>
+<!-- templates.js (pure Templates-tab helpers, window.RNAnixTemplates) must load before app.js -->
+<script src="templates.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

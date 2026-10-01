@@ -882,6 +882,9 @@
     document.querySelectorAll('.tabpanel').forEach(function (p) { p.classList.toggle('active', p.dataset.panel === tab); });
     if (tab === 'ss') { renderSSPanel(); if (ssMode === 'flatten' && !ssPollTimer) ssPollTimer = setInterval(renderSSPanel, 200); }
     else { clearInterval(ssPollTimer); ssPollTimer = null; }
+    // Re-rendered on every open so the tab always reflects the CURRENT thread's job (and lazily
+    // fetches /brief for a restored thread that has a finished job but no cached templates yet).
+    if (tab === 'templates') { _tplRenderKey = null; renderTemplates(); }
   }
   document.querySelectorAll('.vtab').forEach(function (b) { b.onclick = function () { switchTab(b.dataset.tab); }; });
   // Actually pulls the current tab's real data into the chat message as a labeled text block —
@@ -897,9 +900,15 @@
       var n = $('mohcaInput').value.trim().split('\n').filter(Boolean).length;
       block = '[MoHCA-seq — 2D contact map, ' + n + ' entries]\n' + $('mohcaInput').value.trim();
     } else if (kind === 'templates') {
-      block = '[templates]\n' + TEMPLATES.map(function (t, i) {
-        return (i + 1) + ') ' + t.id + ' — ' + t.title + ' (' + t.identity + ' identity, ' + t.res + ', ' + t.method + ')' + (t.used ? ' [used as fold template]' : '');
-      }).join('\n');
+      // Built from the SAME normalised /brief data the Templates tab renders (templates.js), so
+      // only real ids/metrics ever reach the chat. Nothing to attach => toast, insert nothing.
+      var tt = findThread(curId), tc = threadTemplates(tt);
+      block = (TPL && tc) ? TPL.attachBlockText(tc.model) : '';
+      if (!block) {
+        toast(!TPL ? 'Templates view unavailable — templates.js did not load.'
+          : (tt && tt.lastJobId && _briefInflight[tt.lastJobId] ? 'Templates are still loading — try again in a moment.' : 'No templates for this job'));
+        return;
+      }
     } else if (kind === 'msa') {
       var recs = parseFasta($('msaInput').value);
       block = '[MSA — ' + recs.length + ' sequences]\n' + $('msaInput').value.trim();
@@ -995,27 +1004,150 @@
   $('msaViz').onclick = function () { $('msaWrap').innerHTML = renderMsa(parseFasta($('msaInput').value)); };
 
   // ================= Templates tab =================
-  var TEMPLATES = [
-    { id: '3P49', title: 'Top structural homolog (used as fold template)', identity: '68%', res: '2.10 Å', method: 'X-ray', used: true },
-    { id: '3OWI', title: 'Secondary candidate — single-domain coverage', identity: '54%', res: '2.85 Å', method: 'X-ray', used: false },
-    { id: '3OWZ', title: 'Tertiary candidate — partial coverage', identity: '49%', res: '3.05 Å', method: 'X-ray', used: false },
-  ];
+  // Real data, three modes (none / johntbm / expert) -- see templates.js (window.RNAnixTemplates)
+  // for the pure parse/normalise/render functions; this section only wires the DOM and the fetch.
+  // One GET /brief per finished job feeds BOTH the Templates tab and the Expert-mode chat bubble
+  // (showPredictionBrief). The normalised model is cached on the thread as
+  // t.templates = {job_id, model} and persisted with it (localStorage + PUT /discussions) -- it is
+  // deliberately small (templates.js caps it). RCSB enrichment is NOT persisted: ~1-2 KB per id
+  // would bloat every discussion for data that is one cheap best-effort GET away.
+  var TPL = window.RNAnixTemplates || null;
+  var _briefInflight = {};   // jobId -> Promise of the raw /brief JSON (concurrent callers share it)
+  var _briefRaw = {};        // jobId -> raw /brief JSON for this page session (chat bubble text; also
+                             // lets a thread that lost its cache re-normalise without a refetch)
+  var _briefFailedAt = {};   // jobId -> Date.now() of the last failed fetch (30 s retry backoff)
+  var _rcsbByJob = {};       // jobId -> RCSB enrichment map, in-memory only (see above)
+  var _rcsbInflight = {};    // jobId -> true while enrichment for that job's ids is running
+  var _rcsbFailedAt = {};    // jobId -> Date.now() when enrichment produced nothing (60 s backoff)
+  var _tplRenderKey = null;  // what the Templates tab currently shows (templatesRenderKey)
+  function fetchBrief(jobId) {
+    if (_briefInflight[jobId]) return _briefInflight[jobId];
+    var p = apiFetch(API + '/brief?job=' + encodeURIComponent(jobId)).then(function (r) {
+      if (!r.ok) throw new Error('brief HTTP ' + r.status);
+      return r.json();
+    }).then(function (j) {
+      delete _briefInflight[jobId]; delete _briefFailedAt[jobId]; _briefRaw[jobId] = j; return j;
+    }, function (e) {
+      delete _briefInflight[jobId]; _briefFailedAt[jobId] = Date.now(); throw e;
+    });
+    _briefInflight[jobId] = p;
+    return p;
+  }
+  // Read-only lookup (unlike currentThread(), which creates a thread when there is none).
+  function findThread(id) {
+    if (!id) return null;
+    return THREADS.filter(function (x) { return x.id === id; })[0] ||
+      EXAMPLE_THREADS.filter(function (x) { return x.id === id; })[0] || null;
+  }
+  // The thread's cached Templates-tab data, but only if it belongs to the job the thread is
+  // showing (a reopened older job must not render a newer job's templates).
+  function threadTemplates(t, jobId) {
+    var c = t && t.templates;
+    if (!c || !c.model) return null;
+    var want = jobId || t.lastJobId || c.job_id;
+    return c.job_id === want ? c : null;
+  }
+  function jobOf(t, jobId) {
+    return (t && jobId) ? ((t.jobs || []).filter(function (j) { return j.job_id === jobId; })[0] || null) : null;
+  }
+  // Fetches /brief for jobId (once -- concurrent callers share the request; an earlier raw copy
+  // from this session is reused), normalises it with templates.js, caches it on the LIVE thread,
+  // re-renders the tab if it is open, then enriches the PDB ids from RCSB best-effort (in-memory,
+  // keyed by job) and re-renders again. Resolves to the raw /brief JSON (null on failure or when
+  // templates.js is unavailable). Never throws.
+  //
+  // THREAD-SWAP HAZARD (why the thread is re-resolved by id before writing): on page load
+  // render() -> reopenJob(t, lastJobId) captures the pre-hydration thread object, then
+  // loadThreadsFromBackend() replaces THREADS wholesale with the backend copy. By the time /brief
+  // (and, for reopenJob, S3 + Mol*) have finished, `t` is a dead object: writing t.templates on
+  // it would be invisible to saveThreads(), the new threads would be persisted WITHOUT the cache,
+  // and every later tab open / page load would refetch /brief + RCSB forever. So the write goes
+  // to findThread(t.id) -- the live object -- and the RCSB map is keyed by job id, not by thread.
+  async function loadJobTemplates(jobId, t) {
+    if (!API || !TPL || !t || !jobId) return null;
+    var cached = threadTemplates(t, jobId);
+    var raw = _briefRaw[jobId] || null;
+    if (!cached) {
+      if (!raw) {
+        try { raw = await fetchBrief(jobId); } catch (e) { renderTemplatesIfVisible(); return null; }
+      }
+      try {
+        t = findThread(t.id) || t;            // live thread object (see THREAD-SWAP HAZARD above)
+        cached = threadTemplates(t, jobId);   // a concurrent caller may have cached it meanwhile
+        if (!cached) {
+          cached = { job_id: jobId, model: TPL.normalizeBrief(raw) };
+          t.templates = cached;
+          saveThreads();
+          renderTemplatesIfVisible();
+        }
+      } catch (e) { return raw; }
+    }
+    if (!_rcsbByJob[jobId] && !_rcsbInflight[jobId]) {
+      _rcsbInflight[jobId] = true;
+      var model = cached.model;
+      var expectSome = TPL.hasEnrichableIds(model);
+      TPL.enrichWithRcsb(model, function (u) { return fetch(u); }).then(function (info) {
+        delete _rcsbInflight[jobId];
+        // "Nothing to look up" caches the empty map; "every lookup failed" records a failure so
+        // renderTemplates() retries after a backoff on a later tab open.
+        if (Object.keys(info).length || !expectSome) _rcsbByJob[jobId] = info;
+        else _rcsbFailedAt[jobId] = Date.now();
+        renderTemplatesIfVisible();
+      }).catch(function () { delete _rcsbInflight[jobId]; _rcsbFailedAt[jobId] = Date.now(); renderTemplatesIfVisible(); });
+    }
+    return raw;
+  }
+  function templatesPanelVisible() {
+    var p = document.querySelector('.tabpanel[data-panel="templates"]');
+    return !!(p && p.classList.contains('active'));
+  }
+  // Everything renderTemplates()'s output depends on, as one string: render() calls
+  // renderTemplatesIfVisible() on every repaint of the chat, and rebuilding the tab's innerHTML
+  // each time would be wasteful (and would kill a text selection in it) when nothing changed.
+  function templatesRenderKey() {
+    var t = findThread(curId), cached = threadTemplates(t), jobId = (t && t.lastJobId) || '';
+    var job = jobOf(t, jobId);
+    return [curId || '', jobId, job ? job.state : '', cached ? cached.job_id : '',
+      _rcsbByJob[jobId] ? 'rcsb' : '', _briefInflight[jobId] ? 'bi' : '', _briefFailedAt[jobId] || '',
+      _rcsbInflight[jobId] ? 'ri' : '', _rcsbFailedAt[jobId] || ''].join('|');
+  }
+  function renderTemplatesIfVisible() {
+    if (templatesPanelVisible() && templatesRenderKey() !== _tplRenderKey) renderTemplates();
+  }
+  // Renders the CURRENT thread's cached /brief model. No job at all -> the mode-"none" empty
+  // state. A thread with a finished job but nothing cached yet (history restored from before this
+  // feature, or a reopen whose /brief failed) fetches lazily -- only while the tab is actually
+  // open (so the init-time call never races loadThreadsFromBackend()'s THREADS swap), with a
+  // short backoff after a failure. A cached job whose RCSB enrichment is missing or failed is
+  // re-enriched the same lazy way (loadJobTemplates short-circuits to that step).
   function renderTemplates() {
-    $('tplWrap').innerHTML = TEMPLATES.map(function (tpl) {
-      return '<div class="tpl-card' + (tpl.used ? ' used' : '') + '">' +
-        '<div class="tpl-h"><a class="tpl-id" href="https://www.rcsb.org/structure/' + tpl.id + '" target="_blank" rel="noopener">' + tpl.id + '</a>' +
-        (tpl.used ? '<span class="tpl-used-badge">used as template</span>' : '') + '</div>' +
-        '<div class="tpl-t">' + tpl.title + '</div>' +
-        '<div class="tpl-meta">' + tpl.identity + ' identity · ' + tpl.res + ' · ' + tpl.method + '</div>' +
-        '<div class="tpl-actions"><button class="mini-btn" data-add="' + tpl.id + '">Add to 3D</button>' +
-        '<a class="mini-btn" href="https://pubmed.ncbi.nlm.nih.gov/?term=' + encodeURIComponent(tpl.title.replace(/[()]/g, '') + ' RNA structure') + '" target="_blank" rel="noopener">Related papers ' + ICON_EXTLINK + '</a></div>' +
-        '</div>';
-    }).join('');
+    var wrap = $('tplWrap'); if (!wrap) return;
+    if (!TPL) { wrap.innerHTML = '<div class="tpl-empty">Templates view unavailable — templates.js did not load.</div>'; return; }
+    var t = findThread(curId);
+    var cached = threadTemplates(t);
+    var jobId = t && t.lastJobId;
+    var visible = templatesPanelVisible();
+    var now = Date.now();
+    if (!cached && jobId && API) {
+      var job = jobOf(t, jobId);
+      if (job && (job.state === 'submitted' || job.state === 'running')) {
+        wrap.innerHTML = '<div class="tpl-empty">Templates for job ' + escapeHtml(jobId) + ' will appear here once it finishes.</div>';
+        _tplRenderKey = templatesRenderKey(); return;
+      }
+      var recentlyFailed = !!_briefFailedAt[jobId] && (now - _briefFailedAt[jobId] < 30000);
+      if (visible && !_briefInflight[jobId] && !recentlyFailed) loadJobTemplates(jobId, t);
+      if (_briefInflight[jobId]) { wrap.innerHTML = '<div class="tpl-empty">Loading templates for job ' + escapeHtml(jobId) + '…</div>'; _tplRenderKey = templatesRenderKey(); return; }
+      if (recentlyFailed) { wrap.innerHTML = '<div class="tpl-empty">Could not load templates for job ' + escapeHtml(jobId) + ' — retry in ~30 s.</div>'; _tplRenderKey = templatesRenderKey(); return; }
+    }
+    if (cached && jobId && API && visible && !_rcsbByJob[jobId] && !_rcsbInflight[jobId] &&
+        !(_rcsbFailedAt[jobId] && now - _rcsbFailedAt[jobId] < 60000)) loadJobTemplates(jobId, t);
+    wrap.innerHTML = TPL.cardsHtml(cached ? cached.model : TPL.normalizeBrief(null), (jobId && _rcsbByJob[jobId]) || {});
     // Adds the template as a new overlay layer alongside whatever's already loaded, rather than
     // replacing it — that's the point of "Add to 3D" vs. the old "View in 3D".
-    $('tplWrap').querySelectorAll('[data-add]').forEach(function (b) {
+    wrap.querySelectorAll('[data-add]').forEach(function (b) {
       b.onclick = function () { switchTab('3d'); addLayer(b.dataset.add, b.dataset.add + ' (template)'); };
     });
+    _tplRenderKey = templatesRenderKey();
   }
 
   // ================= Info tab — same per-structure metadata style as the main RNA Atlas site.
@@ -1338,12 +1470,12 @@
       msgs: [
         { role: "user", text: "Predict this glycine riboswitch aptamer with Expert mode: GGCUCUGGAGAGAACCGUUUAAUCGGUCGCCGAAGGAGCAAGCUCUGCGCAUAUGCAGAGUGAAACUCUCAGGCAAAAGGACAGAG" },
         { tool: "predict.submit", args: 'model="daslab-ptnx1", msa_mode="protenix-mt", expert=true', result: "Job queued · job_id daslab-ptnx1:8f2a1c" },
-        { tool: "research.expert", args: 'family_search="glycine riboswitch"', result: "Found 3 homologous PDB templates — see the Templates tab" },
+        { tool: "research.expert", args: 'family_search="glycine riboswitch"', result: "Literature and PDB search finished (simulated)" },
         { tool: "predict.status", args: "poll", result: "MSA build → predict & refine → done (4m 12s, simulated)" },
         {
           role: "assistant",
-          text: "Finished — the viewer on the right is showing 3P49, the real homolog Expert mode selected as the fold template (a real prediction result would replace it once the Protenix backend is connected). The two-domain tandem aptamer architecture is clearly resolved in the template. Check the Templates tab for the other candidates I considered, or the MSA tab for the alignment.",
-          thinking: "The input has two conserved stem-loop regions separated by a short linker, consistent with the tandem glycine-binding aptamer architecture described for this riboswitch class. Cross-referencing Rfam and RCSB for structural homologs: 3P49 gives the best combined coverage across both binding pockets (68% sequence identity over the full construct), while 3OWI and 3OWZ each only resolve a single domain. Selecting 3P49 as the primary fold template and flagging the other two as secondary evidence rather than discarding them.",
+          text: "Finished — the viewer on the right is showing 3P49, a real glycine riboswitch crystal structure loaded live from RCSB as a stand-in for this mockup (a real prediction result would replace it once the Protenix backend is connected). The two-domain tandem aptamer architecture is clearly resolved in it. Check the MSA tab for the alignment.",
+          thinking: "The input has two conserved stem-loop regions separated by a short linker, consistent with the tandem glycine-binding aptamer architecture described for this riboswitch class. Cross-referencing Rfam and RCSB for solved structures of the family: 3P49 covers both binding pockets, while 3OWI and 3OWZ each resolve only a single domain, so 3P49 is the most useful structure to show as a visual reference here.",
           sources: [
             { label: "PDB 3P49", url: "https://www.rcsb.org/structure/3P49" },
             { label: "Rfam: glycine riboswitch", url: "https://rfam.org/search?q=glycine+riboswitch" },
@@ -1450,6 +1582,7 @@
     renderExamples();
     renderJobsPanel(t);
     renderAttachChips(t);
+    renderTemplatesIfVisible();
     if (!t) {
       $('chatTitle').textContent = 'New chat';
       // Pinned layers (see toggleLayerPinned) survive going to "New chat" too -- pinning means
@@ -1546,6 +1679,7 @@
     return (s && s.idToken) ? { 'Authorization': 'Bearer ' + s.idToken } : null;
   }
   var _discussionsSyncTimer = null;
+  var _sync413Toasted = false;
   // True from page load until loadThreadsFromBackend()'s GET settles. Blocks the PUT below during
   // that window -- otherwise the very first render()'s saveThreads() (using whatever localStorage
   // seeded THREADS with, possibly just []) schedules a 2s-debounced PUT that fires unconditionally
@@ -1565,6 +1699,11 @@
     _discussionsSyncTimer = setTimeout(function () {
       h['content-type'] = 'application/json';
       apiFetch(API + '/discussions', { method: 'PUT', headers: h, body: JSON.stringify({ threads: THREADS.slice(0, 50) }) })
+        .then(function (r) {
+          // A payload-too-large rejection means cross-device history has quietly stopped
+          // updating -- say so once rather than swallow it with the other best-effort failures.
+          if (r && r.status === 413 && !_sync413Toasted) { _sync413Toasted = true; toast('History sync paused: too much stored per discussion'); }
+        })
         .catch(function () { /* best-effort -- localStorage stays the source of truth on this device either way */ });
     }, 2000);
   }
@@ -1644,6 +1783,7 @@
       await addPredictionLayer(text, jobId + ' (reopened)', stage.ranks);
       t.structure = jobId + ' (reopened)'; t.pdb = null; t.lastJobId = jobId; curJobId = jobId;
       render();
+      loadJobTemplates(jobId, t);   // Templates tab for the reopened job (best-effort, cached per thread)
       return { ok: true, job_id: jobId };
     } catch (e) { toast('Could not reopen job: ' + e.message); return { ok: false, error: 'Could not reopen job: ' + e.message }; }
   }
@@ -1941,13 +2081,27 @@
     syncCompUI();
     return renderLayers(themeChosen).then(function () { buildSeqPanel(); renderLayersMenu(); });
   }
+  // The ONE /brief fetch for a finished job goes through loadJobTemplates(), which also fills the
+  // Templates tab; this just turns the raw JSON into the Expert-mode chat bubble. Source pills:
+  // the PDB ids Claude proposed, then the first few papers/pages it read (templates.js has
+  // already dropped every source whose URL is not http(s)).
   async function showPredictionBrief(jobId, t) {
     if (!API) return;
     try {
-      var r = await (await apiFetch(API + '/brief?job=' + encodeURIComponent(jobId))).json();
-      if (!r.brief && !r.rationale && !r.thinking) return;
-      t.msgs.push({ role: 'assistant', text: r.brief || r.rationale || 'Research finished.', thinking: r.thinking,
-        sources: (r.template_pdb_ids || []).map(function (id) { return { label: 'PDB ' + id, url: 'https://www.rcsb.org/structure/' + id }; }) });
+      var r = await loadJobTemplates(jobId, t);
+      // Tab data was cached in an earlier session, so the brief text is not in memory: fetch it
+      // (skipped when the fetch just failed -- loadJobTemplates already recorded that).
+      if (!r && !_briefFailedAt[jobId]) r = await fetchBrief(jobId);
+      if (!r || (!r.brief && !r.rationale && !r.thinking)) return;
+      var tc = threadTemplates(t, jobId);
+      var model = tc ? tc.model : (TPL ? TPL.normalizeBrief(r) : null);
+      var ids = (model && Array.isArray(model.proposed)) ? model.proposed : (Array.isArray(r.template_pdb_ids) ? r.template_pdb_ids.map(String) : []);
+      var pills = ids.map(function (id) { return { label: 'PDB ' + id, url: 'https://www.rcsb.org/structure/' + encodeURIComponent(id) }; });
+      ((model && Array.isArray(model.sources)) ? model.sources.slice(0, 5) : []).forEach(function (s) {
+        if (!s || typeof s.url !== 'string' || !/^https?:\/\//i.test(s.url)) return;
+        pills.push({ label: s.title || s.url.replace(/^https?:\/\/(www\.)?/i, '').split('/')[0], url: s.url });
+      });
+      t.msgs.push({ role: 'assistant', text: r.brief || r.rationale || 'Research finished.', thinking: r.thinking, sources: pills });
       render();
     } catch (e) { /* Expert-mode brief is best-effort */ }
   }
