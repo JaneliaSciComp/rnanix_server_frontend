@@ -2226,7 +2226,10 @@
         updateJob(t, jobId, m.notes.length ? { state: 'done', notes: m.notes } : { state: 'done' });
         t.msgs.push({ role: 'assistant', text: (stage.relax === 'failed'
           ? 'Done — structure loaded in the viewer (job ' + jobId + '). Note: structure relaxation did not complete for this run, so this is the raw (unrelaxed) fold.'
-          : 'Done — that\'s a real predicted structure from the AWS pipeline, loaded in the viewer on the right (job ' + jobId + ').') + (interimShown ? '' : notesSuffix(m)) });
+          : stage.relax === 'skipped'
+            // T-0017: the contact-conditioned specialist pipeline has no relaxation stage by design.
+            ? 'Done — structure loaded in the viewer (job ' + jobId + '). Note: this model\'s pipeline has no structure-relaxation step, so this is the raw (unrelaxed) fold.'
+            : 'Done — that\'s a real predicted structure from the AWS pipeline, loaded in the viewer on the right (job ' + jobId + ').') + (interimShown ? '' : notesSuffix(m)) });
         render();
         showPredictionBrief(jobId, t);
         return;
