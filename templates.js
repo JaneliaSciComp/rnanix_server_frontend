@@ -38,6 +38,8 @@
   // 120 chars of quote) is ~7 KB. The backend keeps up to 40 with 300-char quotes; the extra is
   // tooltip text nobody reads in bulk.
   var MAX_SOURCES = 25;
+  var MAX_PAPERS = 10;      // /brief caps at 10 too (web_bridge._MAX_PAPERS); a request carries at most 4 papers,
+                            // so the persisted worst case is ~4 x 800 chars = 3.4 KB on top of the sources budget
   var MAX_UPLOADS = 20;
   var MAX_UPLOAD_CHAINS = 50;
   var MAX_CITED_TEXT = 120;
@@ -213,6 +215,17 @@
       seenUrl[s.url] = 1;
       sources.push(s);
     });
+    // The user's own uploaded papers the research relied on (T-0036): {name, pages, used_for},
+    // strings only, no link in v1 (a download link is per-owner and waits on per-user authz).
+    var papers = [], seenPaper = {};
+    list(j.papers).forEach(function (raw) {
+      if (!raw || typeof raw !== 'object' || !str(raw.name) || papers.length >= MAX_PAPERS) return;
+      var p = { name: str(raw.name).slice(0, 200), pages: str(raw.pages).slice(0, 100), usedFor: str(raw.used_for).slice(0, 500) };
+      var key = p.name + '|' + p.pages;   // same paper + pages twice = one line (first `used_for` wins)
+      if (seenPaper[key]) return;
+      seenPaper[key] = 1;
+      papers.push(p);
+    });
     var mode = str(j.template_mode).toLowerCase();
     if (mode !== 'none' && mode !== 'expert' && mode !== 'johntbm') {
       // Older bridge without template_mode: Expert research is the only thing that could have
@@ -226,6 +239,7 @@
       templates: templates,
       dropped: dropped,
       sources: sources,
+      papers: papers,
       proposed: proposed,
       note: str(j.note) || '',
       uploads: uploads
@@ -387,6 +401,17 @@
     if (!items.length) return '';
     return '<div class="tpl-sec"><div class="tpl-sec-h">Sources Claude read</div><ul class="tpl-src-list">' + items.join('') + '</ul></div>';
   }
+  // The user's uploaded papers the research relied on: name, pages, what each informed (T-0036).
+  function papersHtml(papers) {
+    var items = list(papers).map(function (p) {
+      if (!p || typeof p !== 'object' || !str(p.name)) return '';
+      return '<li><span class="tpl-upload-name">' + esc(str(p.name)) + '</span>' +
+        (str(p.pages) ? '<span class="tpl-src-host">p. ' + esc(str(p.pages)) + '</span>' : '') +
+        (str(p.usedFor) ? '<span class="tpl-paper-use">' + esc(str(p.usedFor)) + '</span>' : '') + '</li>';
+    }).filter(Boolean);
+    if (!items.length) return '';
+    return '<div class="tpl-sec"><div class="tpl-sec-h">Your papers Claude used</div><ul class="tpl-src-list">' + items.join('') + '</ul></div>';
+  }
   // The user's uploaded template files and their chains (name, kind, length) -- plain text.
   function uploadsHtml(uploads) {
     var items = list(uploads).map(function (u) {
@@ -409,7 +434,7 @@
     var m = isModel(model) ? model : normalizeBrief(null);
     var info = rcsbInfo && typeof rcsbInfo === 'object' ? rcsbInfo : {};
     var note = str(m.note) ? '<div class="tpl-note">' + esc(str(m.note)) + '</div>' : '';
-    if (m.mode === 'none') return '<div class="tpl-empty">' + esc(EMPTY_TEXT) + '</div>' + note + uploadsHtml(m.uploads);
+    if (m.mode === 'none') return '<div class="tpl-empty">' + esc(EMPTY_TEXT) + '</div>' + note + papersHtml(m.papers) + uploadsHtml(m.uploads);
     var groups = groupTemplates(m.templates);
     var legacyProposed = (m.mode === 'expert' && !groups.length) ? proposedOnly(m) : [];
     var html = '<div class="tpl-mode">' + esc(m.mode === 'johntbm'
@@ -429,6 +454,7 @@
       if (groups.length) html += chipsHtml('Also proposed by Claude (use not recorded)', proposedOnly(m), info, false);
       html += sourcesHtml(m.sources);
     }
+    html += papersHtml(m.papers);     // every mode: the bridge emits papers whenever the research used any
     html += uploadsHtml(m.uploads);
     return html;
   }
@@ -463,6 +489,11 @@
     if (dropped.length) lines.push('proposed, not used: ' + dropped.join(', '));
     var extra = proposedOnly(m);
     if (extra.length) lines.push('also proposed by Claude: ' + extra.join(', '));
+    // The user's own papers the research relied on (T-0036): exactly the provenance the chat
+    // Claude cannot otherwise see.
+    list(m.papers).forEach(function (p) {
+      lines.push('your paper: ' + p.name + (p.pages ? ' p. ' + p.pages : '') + (p.usedFor ? ' — ' + p.usedFor : ''));
+    });
     return '[templates — expert mode]\n' + lines.join('\n');
   }
 

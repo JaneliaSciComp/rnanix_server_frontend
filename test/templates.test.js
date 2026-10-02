@@ -767,3 +767,55 @@ test('QA: resolution formatting -- always two decimals with Å; numeric strings 
   assert.ok(junk.includes('<div class="tpl-meta">SOLUTION NMR</div>') && !junk.includes('Å'), 'NMR entry without a resolution shows the method alone');
   assert.ok(T.cardsHtml(m, {}).includes('<div class="tpl-meta">—</div>'), 'no enrichment -> em dash');
 });
+
+
+// ---- T-0036: the user's uploaded papers the research relied on ----
+test('papers from /brief are normalised, deduplicated, capped and rendered without links', () => {
+  const T = load();
+  const brief = Object.assign({}, EXPERT_BRIEF, { papers: [
+    { name: 'riboswitch_1998.pdf', pages: '3, 5-6', used_for: 'numbering of the P1 helix' },
+    { name: 'riboswitch_1998.pdf', pages: '3, 5-6', used_for: 'duplicate' },
+    { name: '', pages: '1', used_for: 'dropped' },
+    'junk',
+  ].concat(Array.from({ length: 20 }, (_, i) => ({ name: 'p' + i + '.pdf', pages: '', used_for: '' }))) });
+  const m = T.normalizeBrief(brief);
+  assert.equal(m.papers.length, 10);
+  eq(m.papers[0], { name: 'riboswitch_1998.pdf', pages: '3, 5-6', usedFor: 'numbering of the P1 helix' });   // eq: vm-realm objects
+  const html = T.cardsHtml(m, {});
+  assert.match(html, /Your papers Claude used/);
+  assert.match(html, /riboswitch_1998\.pdf/);
+  assert.match(html, /p\. 3, 5-6/);
+  assert.match(html, /numbering of the P1 helix/);
+  assert.doesNotMatch(html, /href="[^"]*riboswitch/);         // no link in v1
+});
+
+test('a brief without papers renders no papers section, and the none mode still shows papers it used', () => {
+  const T = load();
+  const none = T.cardsHtml(T.normalizeBrief(EXPERT_BRIEF), {});
+  assert.doesNotMatch(none, /Your papers Claude used/);
+  eq(T.normalizeBrief(NONE_BRIEF).papers, []);
+  const withPapers = T.cardsHtml(T.normalizeBrief(Object.assign({}, NONE_BRIEF, { papers: [{ name: 'a.pdf', pages: '2', used_for: 'the sequence' }] })), {});
+  assert.match(withPapers, /Your papers Claude used/);
+  assert.match(withPapers, /a\.pdf/);
+});
+
+test('paper fields are escaped', () => {
+  const T = load();
+  const html = T.cardsHtml(T.normalizeBrief(Object.assign({}, EXPERT_BRIEF, { papers: [{ name: '<img src=x onerror=1>.pdf', pages: '"1"', used_for: '<b>x</b>' }] })), {});
+  assert.doesNotMatch(html, /<img/);
+  assert.match(html, /&lt;img/);
+  assert.match(html, /p\. &quot;1&quot;/);
+  assert.match(html, /&lt;b&gt;x&lt;\/b&gt;/);
+  assert.doesNotMatch(html, /<b>/);
+});
+
+test('papers render in johntbm mode too, and the attach block names them', () => {
+  const T = load();
+  const jb = T.normalizeBrief(Object.assign({}, JOHNTBM_BRIEF, { papers: [{ name: 'a.pdf', pages: '2', used_for: 'the sequence' }] }));
+  assert.match(T.cardsHtml(jb, {}), /Your papers Claude used/);
+  const ex = T.normalizeBrief(Object.assign({}, EXPERT_BRIEF, { papers: [{ name: 'a.pdf', pages: '2', used_for: 'the sequence' }, { name: 'b.pdf', pages: '', used_for: '' }] }));
+  const block = T.attachBlockText(ex);
+  assert.match(block, /your paper: a\.pdf p\. 2 — the sequence/);
+  assert.match(block, /your paper: b\.pdf\n|your paper: b\.pdf$/);
+  assert.equal(T.attachBlockText(T.normalizeBrief(Object.assign({}, NONE_BRIEF, { papers: [{ name: 'a.pdf', pages: '', used_for: '' }] }))), '');
+});

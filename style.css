@@ -785,3 +785,4 @@ details.reasoning summary::-webkit-details-marker { display: none; }
 .sp-body { display: flex; flex-direction: column; gap: 10px; }
 .sp-chain:last-child { margin-bottom: 0; }
 .sp-empty { font-size: 11.5px; color: var(--text-dim); padding: 4px; }
+.tpl-paper-use { flex-basis: 100%; font-size: 11px; color: var(--text-dim); margin-top: 2px; }   /* own line under name + pages (the li is a wrapping flex row) */
