@@ -2227,8 +2227,9 @@
         t.msgs.push({ role: 'assistant', text: (stage.relax === 'failed'
           ? 'Done — structure loaded in the viewer (job ' + jobId + '). Note: structure relaxation did not complete for this run, so this is the raw (unrelaxed) fold.'
           : stage.relax === 'skipped'
-            // T-0017: the contact-conditioned specialist pipeline has no relaxation stage by design.
-            ? 'Done — structure loaded in the viewer (job ' + jobId + '). Note: this model\'s pipeline has no structure-relaxation step, so this is the raw (unrelaxed) fold.'
+            // T-0017/T-0042: relax did not run by choice -- the model's pipeline has no relaxation
+            // stage (contact-conditioned specialist) or the request unticked it. Wording covers both.
+            ? 'Done — structure loaded in the viewer (job ' + jobId + '). Note: structure relaxation was not run for this job (unticked, or this model\'s pipeline has no relaxation step), so this is the raw (unrelaxed) fold.'
             : 'Done — that\'s a real predicted structure from the AWS pipeline, loaded in the viewer on the right (job ' + jobId + ').') + (interimShown ? '' : notesSuffix(m)) });
         render();
         showPredictionBrief(jobId, t);
