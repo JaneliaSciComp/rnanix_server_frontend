@@ -1776,8 +1776,11 @@
     el.hidden = false;
     el.innerHTML = '<span class="jobs-label">Jobs in this discussion</span>' + jobs.map(function (j) {
       var clickable = j.state === 'done';
-      return '<div class="job-row' + (clickable ? ' clickable' : '') + '" data-job="' + j.job_id + '" title="' + j.job_id + '">' +
+      var notes = Array.isArray(j.notes) ? j.notes : [];
+      var title = j.job_id + (notes.length ? '\n' + notes.join('\n') : '');
+      return '<div class="job-row' + (clickable ? ' clickable' : '') + '" data-job="' + j.job_id + '" title="' + escapeHtml(title) + '">' +
         '<span class="job-id">' + j.job_id.split(':').slice(0, 2).join(':') + '</span>' + jobPillHtml(j.state) +
+        (notes.length ? '<span class="job-caveat" title="' + escapeHtml(notes.join('\n')) + '">caveat</span>' : '') +
         '<span class="job-time">' + fmtJobTime(j.ts) + '</span></div>';
     }).join('');
     el.querySelectorAll('.job-row.clickable').forEach(function (row) {
@@ -1797,9 +1800,10 @@
       var text = await fetchStageResult(stage);
       await addPredictionLayer(text, jobId + ' (reopened)', stage.ranks);
       t.structure = jobId + ' (reopened)'; t.pdb = null; t.lastJobId = jobId; curJobId = jobId;
+      if (m.notes.length) { updateJob(t, jobId, { notes: m.notes }); toast('Note: ' + m.notes.join(' ')); }
       render();
       loadJobTemplates(jobId, t);   // Templates tab for the reopened job (best-effort, cached per thread)
-      return { ok: true, job_id: jobId };
+      return m.notes.length ? { ok: true, job_id: jobId, notes: m.notes } : { ok: true, job_id: jobId };
     } catch (e) { toast('Could not reopen job: ' + e.message); return { ok: false, error: 'Could not reopen job: ' + e.message }; }
   }
   // ================= real predict/status wiring (rna-atlas-inference bridge) =================
@@ -1874,7 +1878,7 @@
       summary: 'Exactly 2 checkpoints, chosen by contact type (or Auto, from your contacts):',
       items: [
         'itt-contact — intra-chain contacts (pseudoknots, tertiary motifs), no MSA',
-        'contact-specialist — inter-chain contacts (protein↔RNA docking), uses MSA'
+        'contact-specialist — inter-chain contacts (protein↔RNA docking), runs single-sequence (no MSA) — outside its validated regime (it was validated with an MSA); results carry a caveat'
       ]
     },
     'kgl-synth': {
@@ -2072,6 +2076,12 @@
     if (stage.url) return (await fetch(stage.url)).text();
     return stage.cif || '';
   }
+  // The backend's manifest notes (T-0013), appended to the done/relaxing chat messages so the
+  // caveat is read where the result is announced, not only in S3.
+  function notesSuffix(m) {
+    var notes = (m && m.notes) || [];
+    return notes.length ? '\n\nNote: ' + notes.join('\nNote: ') : '';
+  }
   function mapPredictStatus(j) {
     var st = j.stages || {}, nm = st.nomsa || {}, ms = st.msa || {};
     var hasResult = nm.url || nm.cif || ms.url || ms.cif;
@@ -2079,7 +2089,10 @@
     // manifest BEFORE RelaxPicks runs) while the execution is still genuinely running -- a real
     // result exists, but it is not the final word yet, so this must not count as done.
     var relaxPending = nm.relax === 'pending' || ms.relax === 'pending';
-    return { state: j.state || 'unknown', error: j.error, nomsa: nm, msa: ms,
+    // notes (T-0013): how the result was made, e.g. contact-specialist ran single-sequence outside
+    // the regime it was validated in. Top-level in /status, next to state; absent means none.
+    var notes = Array.isArray(j.notes) ? j.notes.filter(function (n) { return typeof n === 'string' && n; }) : [];
+    return { state: j.state || 'unknown', error: j.error, nomsa: nm, msa: ms, notes: notes,
              done: (j.state === 'done' || !!hasResult) && !relaxPending };
   }
   function addPredictionLayer(text, label, ranks) {
@@ -2204,16 +2217,16 @@
           // steric clashes) once it lands.
           interimShown = true;
           if (card) card.result = 'folded — relaxing…';
-          t.msgs.push({ role: 'assistant', text: 'The fold finished and is loaded in the viewer (job ' + jobId + ') — structure relaxation is still running and will refine it automatically when done.' });
+          t.msgs.push({ role: 'assistant', text: 'The fold finished and is loaded in the viewer (job ' + jobId + ') — structure relaxation is still running and will refine it automatically when done.' + notesSuffix(m) });
           render();
           await new Promise(function (res) { setTimeout(res, pollIntervalMs(Date.now() - startTime)); });
           continue;
         }
         if (card) card.result = 'done — structure loaded in the viewer';
-        updateJob(t, jobId, { state: 'done' });
-        t.msgs.push({ role: 'assistant', text: stage.relax === 'failed'
+        updateJob(t, jobId, m.notes.length ? { state: 'done', notes: m.notes } : { state: 'done' });
+        t.msgs.push({ role: 'assistant', text: (stage.relax === 'failed'
           ? 'Done — structure loaded in the viewer (job ' + jobId + '). Note: structure relaxation did not complete for this run, so this is the raw (unrelaxed) fold.'
-          : 'Done — that\'s a real predicted structure from the AWS pipeline, loaded in the viewer on the right (job ' + jobId + ').' });
+          : 'Done — that\'s a real predicted structure from the AWS pipeline, loaded in the viewer on the right (job ' + jobId + ').') + (interimShown ? '' : notesSuffix(m)) });
         render();
         showPredictionBrief(jobId, t);
         return;

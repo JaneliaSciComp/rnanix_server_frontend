@@ -306,6 +306,7 @@ button { font-family: inherit; cursor: pointer; }
 .job-row.clickable { cursor: pointer; }
 .job-row.clickable:hover { border-color: var(--accent-dim); }
 .job-row .job-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text-muted); overflow-wrap: anywhere; word-break: break-word; }
+.job-row .job-caveat { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); border: 1px solid var(--accent-dim); border-radius: 999px; padding: 0 6px; cursor: help; }
 .job-pill { font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 999px; text-transform: uppercase; letter-spacing: .02em; }
 .job-pill.job-running { background: rgba(255, 183, 3, .15); color: #ffb703; }
 .job-pill.job-done { background: rgba(47, 214, 167, .15); color: var(--accent); }
