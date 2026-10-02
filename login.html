@@ -64,10 +64,14 @@
      edge gate serves to visitors who are NOT logged in, so it must not pull in app.js -- both to
      keep the un-authenticated surface minimal and because app.js does nothing on this page.
      NOTE: in production this file is served from the SITE ROOT as /login (-> the /login.html
-     object), not from /inference/. The deploy script rewrites the two relative asset refs
-     (style.css above, auth.js below) to /inference/style.css and /inference/auth.js -- at the
-     root, a relative style.css would be the Atlas landing page's stylesheet and auth.js would
-     not exist. Relative here keeps `python3 -m http.server` from the repo root working. -->
+     object), not from /inference/. It is published ONLY by rna-atlas-inference's
+     scripts/deploy_frontend.sh, which rewrites the two relative asset refs (style.css above,
+     auth.js below) to /inference/style.css and /inference/auth.js -- at the root, a relative
+     style.css would be the Atlas landing page's stylesheet and auth.js would not exist -- and
+     injects the window.INFER_API / COGNITO_REGION / COGNITO_CLIENT_ID / AUTH_COOKIE_DOMAIN config
+     block right before the auth.js tag (without it RNAnixAuth.configured() is false, the forms
+     fall back to index.html, and the gate bounces straight back here: a lockout). Never copy this
+     file to S3 by hand. Relative here keeps `python3 -m http.server` from the repo root working. -->
 <script src="auth.js"></script>
 <script>
 // ?next= is set by the edge gate: the same-origin path the visitor originally asked for ("/",

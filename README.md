@@ -113,6 +113,34 @@ untouched; only a brand-new chat / an unrecognized message in one goes to the re
 PyMOL MCP is not implemented at all yet — the client-side command parser's real actions (fetch,
 color, style, remove water, export) are the whole story on the viewer-manipulation side for now.
 
+## Deploying
+
+This repo has no build step and no deploy script of its own. The live site (`/inference` on
+rna-atlas.org, with the login page at the site root as `/login`) is published **only** with
+`scripts/deploy_frontend.sh` in the backend repo,
+[`rna-atlas-inference`](https://github.com/JaneliaSciComp/rna_atlas_inference), run from that
+repo's main worktree with fresh `atlas-deployer` credentials while this repo's main worktree is on
+trunk and clean:
+
+```bash
+cd /path/to/rna-atlas-inference
+DRY_RUN=1 scripts/deploy_frontend.sh    # resolve config, build, local checks -- touches nothing
+scripts/deploy_frontend.sh              # upload, invalidate CloudFront, verify the live page
+```
+
+Why not `aws s3 sync`: `login.html` is served from the site root, so the script rewrites its
+`style.css` / `auth.js` refs to `/inference/...`, and it injects the `window.INFER_API` /
+`COGNITO_REGION` / `COGNITO_CLIENT_ID` / `AUTH_COOKIE_DOMAIN` block *before* `auth.js` in both
+`index.html` and `login.html` (the values come from the backend's `terraform output`; nothing is
+committed in either repo). A copy without those is a dead login form behind the gate -- a lockout
+for everyone. The upload set is derived from `index.html`'s `<script>` / `<link>` tags plus what
+`app.js` lazy-loads (`molstar.*`), so a new file referenced from `index.html` ships automatically
+and an unreferenced one does not. The script refuses a dirty tree or a branch other than trunk
+(`ONLY="auth.js login.html"` ships named files from a dirty tree; the script header documents every
+knob) and ends with a live check of `/login` and every asset (`CHECK_ONLY=1` runs just that). If
+it prints an `aws --profile default cloudfront create-invalidation ...` line, run it: CloudFront
+otherwise serves the old files for up to a day.
+
 ## Running it locally
 
 No build step. Any static file server works:
