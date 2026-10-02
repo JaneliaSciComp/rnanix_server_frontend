@@ -49,23 +49,34 @@
     return j;
   }
 
-  // refreshToken is optional: REFRESH_TOKEN_AUTH's own response never includes a new one (the
-  // original stays valid, ~30 days by default), so refreshSession() must pass the existing one
-  // through explicitly here or it would get silently wiped on every renewal.
-  function cookieAttrs(maxAge) {
+  function cookieAttrs(maxAge, withDomain) {
     var a = '; Path=/; Max-Age=' + maxAge + '; SameSite=Lax';
     if (location.protocol === 'https:') a += '; Secure';
-    if (COOKIE_DOMAIN) a += '; Domain=' + COOKIE_DOMAIN;
+    if (withDomain && COOKIE_DOMAIN) a += '; Domain=' + COOKIE_DOMAIN;
     return a;
   }
+  // A host-only cookie and a Domain=-scoped one with the same name are DIFFERENT cookies to the
+  // browser, and both are sent. After a deploy changes AUTH_COOKIE_DOMAIN the stale variant used
+  // to live on until its Max-Age (12 h): a sign-in refreshed only the new variant and sign-out
+  // cleared only the current one, so a still-valid old token kept passing the edge gate for page
+  // loads after logout (T-0043; the gate itself tolerates duplicates since T-0021). So: every
+  // write of the Domain= cookie also expires the host-only form, and clearing expires both.
+  function expireHostOnlyCookie() { document.cookie = COOKIE_NAME + '=' + cookieAttrs(0, false); }
   function setCookie(idToken, expiresAt) {
-    document.cookie = COOKIE_NAME + '=' + idToken + cookieAttrs(Math.max(0, Math.floor((expiresAt - Date.now()) / 1000)));
+    if (COOKIE_DOMAIN) expireHostOnlyCookie();
+    document.cookie = COOKIE_NAME + '=' + idToken + cookieAttrs(Math.max(0, Math.floor((expiresAt - Date.now()) / 1000)), true);
   }
-  function clearCookie() { document.cookie = COOKIE_NAME + '=' + cookieAttrs(0); }
+  function clearCookie() {
+    document.cookie = COOKIE_NAME + '=' + cookieAttrs(0, true);
+    if (COOKIE_DOMAIN) expireHostOnlyCookie();
+  }
   function hasCookie() {
     return document.cookie.split(';').some(function (p) { return p.trim().indexOf(COOKIE_NAME + '=') === 0; });
   }
 
+  // refreshToken is optional: REFRESH_TOKEN_AUTH's own response never includes a new one (the
+  // original stays valid, ~30 days by default), so refreshSession() must pass the existing one
+  // through explicitly here or it would get silently wiped on every renewal.
   function saveSession(auth, email, refreshToken) {
     var expiresAt = Date.now() + (auth.ExpiresIn || 3600) * 1000;
     storage.setItem(SESSION_KEY, JSON.stringify({
